@@ -1,8 +1,25 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/core/__init__.py
+# Description:
+#   Initializes the core module, providing fundamental classes for devices,
+#   networks, transformer components, and event handling in the simulator.
+#
+# ---------------------------------------------------------------------------
+
 """
-Core components for the transformer inference simulation.
-This module provides the fundamental building blocks including device management,
-network topology, transformer components, and event handling.
+Initializes the core subpackage, exposing essential classes like Device, Network,
+Transformer, and EventQueue that form the backbone of the simulator's functionality.
 """
+
 
 from .device import Device, ResourceState
 from .network import Network, Link

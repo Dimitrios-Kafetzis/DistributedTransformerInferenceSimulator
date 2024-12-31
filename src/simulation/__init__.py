@@ -1,7 +1,25 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/simulation/__init__.py
+# Description:
+#   Initializes the simulation package that coordinates event-driven
+#   operations for distributed Transformer inference, including the
+#   simulation engine, scheduler, and metrics collection.
+#
+# ---------------------------------------------------------------------------
+
 """
-Simulation components for transformer inference.
-This module provides the simulation engine, event scheduling,
-and metrics collection for analyzing distributed transformer inference.
+Initializes the simulation subpackage, providing the core simulation engine,
+event scheduler, and metrics collectors for analyzing performance, resource
+utilization, and communication overhead in distributed Transformer inference.
 """
 
 from .engine import (

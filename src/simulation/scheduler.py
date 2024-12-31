@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/simulation/scheduler.py
+# Description:
+#   Provides classes and methods for scheduling computation and communication
+#   events in a distributed Transformer inference scenario, including an
+#   ExecutionPlan, event ordering, and resource contention resolution.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Contains the EventScheduler, ExecutionPlan, and related logic for arranging
+Transformer components, transfers, and dependencies over the course of
+the simulation. Manages when computations start, how data is transferred,
+and the final completion times for each generation step.
+"""
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple

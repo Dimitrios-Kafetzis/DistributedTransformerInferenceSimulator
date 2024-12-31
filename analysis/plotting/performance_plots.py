@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: analysis/plotting/performance_plots.py
+# Description:
+#   Provides plotting utilities for visualizing various performance metrics
+#   (latency, throughput, timeline) related to distributed transformer
+#   inference simulations.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Contains functions and classes to create performance-related plots, such as
+latency distribution plots, throughput comparisons, and latency evolution
+over time. These visualizations aid in diagnosing performance bottlenecks
+and evaluating the efficiency of inference algorithms.
+"""
+
 from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np

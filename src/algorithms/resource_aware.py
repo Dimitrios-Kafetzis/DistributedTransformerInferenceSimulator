@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/algorithms/resource_aware.py
+# Description:
+#   Provides the resource-aware distribution algorithm for transformer
+#   inference, incorporating memory, compute, and communication
+#   constraints to optimize component placements.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Contains the main ResourceAwareDistributor class and related data structures,
+implementing a multi-dimensional scoring function and constraints to achieve
+optimized distributed assignments for transformer inference.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 import numpy as np

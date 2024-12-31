@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: analysis/plotting/comparison_plots.py
+# Description:
+#   Provides functions and utilities to create plots for comparing
+#   different algorithms, scenarios, and scaling behaviors within
+#   transformer inference experiments.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Functions to generate visual comparisons between multiple distribution 
+algorithms or scenarios. Useful for side-by-side analysis of latency, 
+resource utilization, and other performance metrics in distributed 
+transformer inference simulations.
+"""
+
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 import numpy as np

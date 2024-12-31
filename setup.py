@@ -1,3 +1,33 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# Description:
+#   This file configures the Transformer Inference Simulator as an
+#   installable Python package. It processes metadata such as
+#   dependencies, versioning, and Python requirements.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Additional docstring if needed:
+
+Example usage:
+    python setup.py install
+
+This script uses setuptools to install the Transformer Inference
+Simulator in a Python environment, ensuring that all dependencies
+are properly handled.
+"""
+
+
 from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as fh:

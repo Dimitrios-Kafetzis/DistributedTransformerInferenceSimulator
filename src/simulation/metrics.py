@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/simulation/metrics.py
+# Description:
+#   Implements metrics collection for distributed Transformer inference,
+#   including performance tracking, resource utilization measurements,
+#   and communication overhead analysis.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides classes and functions for metrics gathering during simulation:
+PerformanceMetrics for latency and step timing, ResourceMetrics for device
+usage and peak demands, and CommunicationMetrics for data-transfer tracking.
+Also includes a MetricsCollector to integrate these metrics in real-time.
+"""
+
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 import numpy as np

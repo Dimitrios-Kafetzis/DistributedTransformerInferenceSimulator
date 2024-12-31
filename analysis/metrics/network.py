@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: analysis/metrics/network.py
+# Description:
+#   Network-related metrics for analyzing communication, bandwidth usage,
+#   and topology patterns in distributed transformer inference scenarios.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides functions and classes to measure and analyze network metrics, such as
+communication overhead, bandwidth utilization, and network topology patterns.
+These metrics are integral to understanding the performance and bottlenecks
+of distributed transformer inference.
+"""
+
 from typing import Dict, List, Optional, Tuple, Set
 import numpy as np
 import pandas as pd

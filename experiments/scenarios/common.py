@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    experiments/scenarios/common.py
+# Description:
+#   Contains base classes and utility functions for experiment scenarios,
+#   including scenario execution pipelines, shared data structures, and
+#   scenario validation methods for distributed inference.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Defines core abstract classes and helper functions for constructing and
+executing various experiment scenarios. Provides common data structures
+and logic that baseline or advanced scenario classes can inherit or use.
+"""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union

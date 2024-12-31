@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    analysis/utils/processing.py
+# Description:
+#   Data processing and transformation utilities for metrics and results
+#   in distributed transformer inference experiments. Includes cleaning,
+#   normalization, aggregation, and other advanced operations.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides functions to process raw experimental or metrics data into
+cleaned, aggregated, and normalized forms, ensuring consistency and
+facilitating in-depth analysis of distributed transformer inference
+performance, resource usage, and communication behavior.
+"""
+
 from typing import Dict, List, Optional, Union
 import numpy as np
 import pandas as pd

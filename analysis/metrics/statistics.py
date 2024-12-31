@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: analysis/metrics/statistics.py
+# Description:
+#   Statistical methods and significance tests for evaluating
+#   distributed Transformer inference experiments and comparing
+#   different algorithmic approaches.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides statistical functions and significance tests such as ANOVA, Kruskal-Wallis,
+Tukey's HSD, and confidence interval calculations. These utilities are used to
+analyze and validate results from the simulation and compare metrics across
+various distribution algorithms and settings.
+"""
+
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd

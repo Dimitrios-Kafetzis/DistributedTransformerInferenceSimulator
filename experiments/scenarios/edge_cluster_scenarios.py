@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    experiments/scenarios/edge_cluster_scenarios.py
+# Description:
+#   Implements scenario classes focused on edge cluster deployments, where
+#   a small number of devices are interconnected with moderate to high
+#   bandwidth, simulating compact edge data centers for Transformer inference.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Defines scenario classes for evaluating distributed inference on a small to
+medium-scale edge cluster, ensuring resource constraints and hierarchical
+topologies are properly tested.
+"""
+
 from typing import Dict, List, Optional
 import numpy as np
 from datetime import datetime

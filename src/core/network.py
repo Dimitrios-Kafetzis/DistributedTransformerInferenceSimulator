@@ -1,3 +1,26 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/core/network.py
+# Description:
+#   Implements the Network class for modeling device connectivity, managing
+#   bandwidth-limited links, and tracking active data transfers in the simulator.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Contains the Network class responsible for storing a graph-based topology,
+adding/removing devices and links, calculating transfer times over available bandwidth,
+and maintaining states for ongoing transfers within the simulation.
+"""
+
 import networkx as nx
 from typing import Dict, List, Tuple, Optional
 import numpy as np

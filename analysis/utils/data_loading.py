@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    analysis/utils/data_loading.py
+# Description:
+#   Functions and utilities to load experimental results, metrics data,
+#   and configuration information for post-analysis of distributed
+#   transformer inference simulations.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides data loading functionalities, including reading results and
+metrics from JSON or YAML files, handling scenario-specific data,
+and constructing DataFrame objects for analysis of distributed
+transformer inference experiments.
+"""
+
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 import json

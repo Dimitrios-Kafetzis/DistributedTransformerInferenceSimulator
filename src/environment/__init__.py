@@ -1,7 +1,25 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/environment/__init__.py
+# Description:
+#   Initializes the environment module, providing functionality for
+#   resource distributions, workload generation, and network topology
+#   configurations for distributed inference scenarios.
+#
+# ---------------------------------------------------------------------------
+
 """
-Environment generation and configuration for transformer inference simulation.
-This module provides tools for creating network topologies, managing resource
-distributions, and generating workloads.
+Initializes the environment subpackage. Includes classes and utilities
+to generate or manage device capabilities, network topologies, and
+inference workloads for the simulator.
 """
 
 from .topology import (

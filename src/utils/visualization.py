@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/utils/visualization.py
+# Description:
+#   Implements the VisualizationManager and functions to generate plots
+#   and performance reports for simulation metrics and network topologies.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Contains classes and methods for plotting resource utilization, communication
+patterns, network topologies, and general performance metrics of distributed
+Transformer inference. Also provides facilities for generating JSON-based
+reports from simulation data.
+"""
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 import networkx as nx

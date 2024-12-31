@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/utils/logging.py
+# Description:
+#   Defines logging utilities for the Transformer Inference Simulator,
+#   including console/file logging, structured metrics logging, and
+#   customizable log levels.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Offers structured logging facilities to capture simulation events, errors,
+and metrics. Includes SimulationLogger, which manages background threads for
+logging JSON metrics, and the NullLogger for disabling logs when required.
+"""
+
 import logging
 import sys
 from enum import Enum

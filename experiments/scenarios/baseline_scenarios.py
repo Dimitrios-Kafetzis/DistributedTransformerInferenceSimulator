@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    experiments/scenarios/baseline_scenarios.py
+# Description:
+#   Provides scenarios that compare baseline strategies (e.g., greedy,
+#   round-robin, static partitioning, dynamic migration) against the
+#   resource-aware approach for distributed Transformer inference.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Implements baseline scenario classes for comparing naive or simpler distribution
+methods, such as greedy or round-robin, with the resource-aware approach in
+transformer inference across multiple edge devices.
+"""
+
 from typing import Dict, List, Optional, Union, Tuple
 import numpy as np
 from datetime import datetime

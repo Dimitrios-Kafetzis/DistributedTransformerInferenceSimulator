@@ -1,3 +1,26 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/core/device.py
+# Description:
+#   Defines the Device class and associated ResourceState tracking for
+#   memory and compute usage, essential for distributed inference.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Implements the Device class that encapsulates memory and compute resource states,
+providing methods to allocate/deallocate resources for transformer components
+and to maintain usage histories.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List
 import numpy as np

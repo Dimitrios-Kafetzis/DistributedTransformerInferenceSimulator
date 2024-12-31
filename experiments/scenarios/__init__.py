@@ -1,7 +1,25 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    experiments/scenarios/__init__.py
+# Description:
+#   Initializes the experiment scenarios package, making common scenario
+#   classes and baseline distributions available for usage across the
+#   codebase.
+#
+# ---------------------------------------------------------------------------
+
 """
-Experiment scenarios for evaluating transformer inference distribution.
-Provides structured test scenarios for different network configurations
-and baseline comparisons.
+Initializes the scenarios module for different experiment configurations.
+Provides classes and functions for running baseline comparisons, distributed
+edge scenarios, edge cluster scenarios, and hybrid cloud-edge setups.
 """
 
 from .common import (

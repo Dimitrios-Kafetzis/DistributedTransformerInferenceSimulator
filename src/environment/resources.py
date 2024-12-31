@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/environment/resources.py
+# Description:
+#   Defines the ResourceDistributor for assigning memory and compute
+#   capacities to devices, and other structures for modeling device
+#   capabilities and bandwidth in simulation.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Implements resource distribution and modeling, including log-normal
+distributions for generating heterogeneous device capabilities, a
+ResourceDistributor for provisioning memory and compute, and a
+BandwidthManager for assigning link bandwidths in the network.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import numpy as np

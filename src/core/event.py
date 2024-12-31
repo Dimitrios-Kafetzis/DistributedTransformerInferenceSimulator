@@ -1,3 +1,26 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/core/event.py
+# Description:
+#   Provides the Event data structure, enumeration of event types, and
+#   the EventQueue for scheduling and processing simulation events.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Defines the Event class with multiple event types (compute, transfer, generation step, etc.)
+and the EventQueue that manages simulation events in chronological order, enabling
+discrete-event simulation for distributed transformer inference.
+"""
+
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, Optional

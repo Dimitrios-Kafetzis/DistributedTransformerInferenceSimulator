@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    experiments/scenarios/distributed_edge_scenarios.py
+# Description:
+#   Defines scenario classes for a distributed edge setting with many
+#   devices, each having varying capabilities and limited interconnect
+#   bandwidth, to test Transformer inference in wide-area edge networks.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Implements classes that model distributed edge environments, where multiple
+geographically dispersed devices must collaboratively run transformer inference
+under bandwidth and latency constraints.
+"""
+
 from typing import Dict, List, Optional
 import numpy as np
 from datetime import datetime

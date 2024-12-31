@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/environment/workload.py
+# Description:
+#   Implements the WorkloadGenerator, which creates transformer workloads of
+#   different sizes and sequence lengths, as well as data structures for
+#   representing workload types in simulation.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Contains classes and functions for generating Transformer-based inference
+workloads, including different model sizes (SMALL, MEDIUM, LARGE), various
+sequence lengths, and generation steps. Also defines WorkloadConfig,
+WorkloadType, and the TransformerWorkload data structure.
+"""
+
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List, Optional

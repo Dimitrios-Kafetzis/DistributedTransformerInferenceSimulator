@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: analysis/plotting/network_plots.py
+# Description:
+#   Provides plotting utilities for visualizing network topologies, 
+#   bandwidth utilization, and communication overhead in distributed 
+#   transformer inference simulations.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Functions and classes that generate plots focusing on network connectivity,
+link bandwidth usage, and overall communication patterns. These visualizations
+help diagnose bottlenecks and optimize data transfers in large-scale 
+transformer inference scenarios.
+"""
+
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np

@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/core/transformer.py
+# Description:
+#   Defines the TransformerConfig, TransformerComponent classes, and
+#   attention/FFN layers that collectively form the core model structure
+#   for distributed inference.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides the Transformer and its components (e.g., AttentionHead, ProjectionLayer,
+FeedForwardNetwork), as well as the core TransformerConfig used to store
+embedding dimensions, precision bytes, and other model parameters.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 import numpy as np

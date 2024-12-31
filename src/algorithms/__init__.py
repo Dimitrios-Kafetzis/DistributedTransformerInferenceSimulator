@@ -1,7 +1,25 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/algorithms/__init__.py
+# Description:
+#   Initializes the algorithms module, providing resource-aware and
+#   baseline distribution strategies for distributed transformer
+#   inference simulation.
+#
+# ---------------------------------------------------------------------------
+
 """
-Algorithms for distributed transformer inference.
-This module provides implementations of resource-aware distribution
-and baseline algorithms for comparison.
+Initializes the algorithms subpackage, exposing classes and functions for
+various distribution strategies (resource-aware, greedy, round-robin, etc.)
+for distributed transformer inference.
 """
 
 from .resource_aware import (

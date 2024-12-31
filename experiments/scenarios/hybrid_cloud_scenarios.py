@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    experiments/scenarios/hybrid_cloud_scenarios.py
+# Description:
+#   Defines scenario classes that incorporate both cloud-based high-capacity
+#   nodes and edge devices with stricter constraints, modeling realistic
+#   hybrid cloud-edge deployments for transformer inference.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Implements scenario classes where a set of powerful cloud nodes collaborate
+with resource-limited edge devices to run large-scale transformer inference
+tasks, highlighting the performance trade-offs and optimization potential
+in hybrid environments.
+"""
+
 from typing import Dict, List, Optional, Set
 import numpy as np
 from datetime import datetime

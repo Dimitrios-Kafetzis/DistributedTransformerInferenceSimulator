@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    analysis/analyze_results.py
+# Description:
+#   Main module for orchestrating the analysis of experimental results and
+#   generating metrics, plots, and summaries for distributed transformer
+#   inference simulations.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides high-level functions to load, process, and analyze the experimental
+results from distributed transformer inference simulations. Integrates
+metrics, plotting, and statistical analysis to produce comprehensive
+evaluations and performance summaries.
+"""
+
 from pathlib import Path
 from typing import Dict, Optional
 import json

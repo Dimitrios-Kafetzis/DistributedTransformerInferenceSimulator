@@ -1,3 +1,29 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: analysis/metrics/performance.py
+# Description:
+#   Performance metrics for assessing distributed Transformer inference, 
+#   including calculations for latency, throughput, jitter, and tail latency 
+#   statistics. These metrics provide insights into model responsiveness 
+#   and bottlenecks under different workload scenarios.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Provides functions and classes to calculate and analyze performance metrics
+such as latency distributions, throughput rates, and scaling behaviors
+in distributed Transformer inference. The goal is to quantify end-to-end
+response times and identify hotspots in the inference pipeline.
+"""
+
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd

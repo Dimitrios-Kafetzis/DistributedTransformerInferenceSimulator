@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/utils/config.py
+# Description:
+#   Provides functionality for loading, validating, and saving
+#   simulation configurations in YAML or JSON format. Includes
+#   configuration classes for networks, resources, workloads, and algorithms.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Implements configuration management for the simulation framework. This includes
+functions for loading YAML/JSON files, converting them into SimulationConfig
+objects, validating parameter ranges, and saving updated configurations back
+to disk.
+"""
+
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 import yaml

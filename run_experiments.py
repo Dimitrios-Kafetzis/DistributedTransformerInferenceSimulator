@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# Description:
+#   This file provides the main entry-point for running various experiments
+#   in the Transformer Inference Simulator. It parses command-line arguments,
+#   loads configurations, executes specified scenarios, and saves results.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Additional docstring if needed:
+
+Example usage:
+    ./run_experiments.py --config path/to/config.yaml --output-dir results/
+
+This script orchestrates scenario execution by loading specified configuration files,
+setting up the environment, and logging final results.
+"""
 
 import os
 from pathlib import Path

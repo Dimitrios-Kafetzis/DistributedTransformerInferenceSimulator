@@ -1,3 +1,28 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    src/environment/topology.py
+# Description:
+#   Provides classes for generating various network topologies (edge cluster,
+#   distributed edge, hybrid cloud-edge), as well as general topology config
+#   structures for the simulator.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Defines the NetworkTopologyGenerator base class along with specific
+implementations like EdgeClusterTopology, DistributedEdgeTopology,
+and HybridCloudEdgeTopology. Each topology generator creates a network
+graph with nodes, edges, and bandwidth assignments used by the simulator.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 import networkx as nx

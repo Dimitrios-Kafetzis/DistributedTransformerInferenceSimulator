@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: analysis/plotting/resource_plots.py
+# Description:
+#   Provides plotting utilities for visualizing resource utilization,
+#   including memory and compute usage, for distributed transformer
+#   inference simulations.
+#
+# ---------------------------------------------------------------------------
+
+"""
+Contains functions and classes to create resource utilization plots
+across multiple devices, helping diagnose imbalances in memory or
+compute load and guiding decisions for more efficient inference.
+"""
+
 from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np

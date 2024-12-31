@@ -1,7 +1,25 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:    analysis/__init__.py
+# Description:
+#   Analysis package initialization. Provides modules for metrics calculation,
+#   plotting, and result analysis for distributed transformer inference
+#   simulations.
+#
+# ---------------------------------------------------------------------------
+
 """
-Analysis package for transformer inference experiments.
-Provides tools for analyzing results, generating visualizations,
-and computing metrics.
+Initializes the analysis package, which includes submodules for metrics
+calculation, visualization tools, and comprehensive results analysis
+of distributed transformer inference experiments.
 """
 
 from .analyze_results import analyze_all_results
