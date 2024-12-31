@@ -1,0 +1,56 @@
+experiment:
+  name: "baseline_comparison"
+  description: "Comparison of baseline algorithms against resource-aware distribution"
+  algorithms:
+    - name: "resource_aware"
+      migration_threshold: 0.9
+      backtrack_limit: 100
+      cache_placement_strategy: "colocated"
+      enable_dynamic_adjustment: true
+
+    - name: "greedy"
+      migration_threshold: 0.0
+      backtrack_limit: 0
+      cache_placement_strategy: "static"
+      enable_dynamic_adjustment: false
+
+    - name: "round_robin"
+      migration_threshold: 0.0
+      backtrack_limit: 0
+      cache_placement_strategy: "static"
+      enable_dynamic_adjustment: false
+
+    - name: "static"
+      migration_threshold: 0.0
+      backtrack_limit: 0
+      cache_placement_strategy: "static"
+      enable_dynamic_adjustment: false
+
+    - name: "dynamic_migration"
+      migration_threshold: 0.8
+      backtrack_limit: 50
+      cache_placement_strategy: "dynamic"
+      enable_dynamic_adjustment: true
+
+scenarios:
+  - name: "edge_cluster"
+    config_file: "edge_cluster.yaml"
+    
+  - name: "distributed_edge"
+    config_file: "distributed_edge.yaml"
+    
+  - name: "hybrid_cloud_edge"
+    config_file: "hybrid_cloud_edge.yaml"
+
+metrics:
+  - "end_to_end_latency"
+  - "resource_utilization"
+  - "communication_overhead"
+  - "migration_frequency"
+  - "constraint_satisfaction"
+
+output:
+  base_dir: "results/baseline_comparison"
+  save_raw_data: true
+  generate_plots: true
+  plot_formats: ["png", "pdf"]

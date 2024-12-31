@@ -1,0 +1,8 @@
+src/__pycache__/
+*.pyc
+.pytest_cache/
+transformer_inference_simulator_env/
+htmlcov/
+transformer_inference_simulator.egg-info/
+*.venv/
+*.env/

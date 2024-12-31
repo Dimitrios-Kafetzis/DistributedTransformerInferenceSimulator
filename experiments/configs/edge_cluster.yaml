@@ -1,0 +1,41 @@
+network:
+  topology_type: "edge_cluster"
+  num_devices: 8
+  min_bandwidth: 1.0    # 1 Gbps
+  max_bandwidth: 10.0   # 10 Gbps
+  edge_probability: 0.3
+  seed: 42
+
+resources:
+  # Log-normal distribution parameters for heterogeneous devices
+  memory_mu: 2.0
+  memory_sigma: 0.5
+  memory_min: 2.0    # Minimum 2GB RAM
+  memory_max: 16.0   # Maximum 16GB RAM
+  compute_mu: 5.0
+  compute_sigma: 0.5
+  compute_min: 10.0e9  # Minimum 10 GFLOPS
+  compute_max: 100.0e9 # Maximum 100 GFLOPS
+  seed: 42
+
+workload:
+  model_type: "SMALL"  # 8 attention heads, D=512
+  initial_sequence_lengths: [128, 256]
+  generation_steps: [32, 64]
+  precision_bytes: 4
+  seed: 42
+
+algorithm:
+  migration_threshold: 0.9
+  backtrack_limit: 100
+  cache_placement_strategy: "colocated"
+  enable_dynamic_adjustment: true
+
+experiment:
+  name: "edge_cluster_evaluation"
+  description: "Edge cluster evaluation with 8 devices"
+  num_runs: 10
+  checkpoint_interval: 10
+  time_limit: 3600  # 1 hour
+  metrics_output_dir: "results/edge_cluster"
+  save_intermediate: true

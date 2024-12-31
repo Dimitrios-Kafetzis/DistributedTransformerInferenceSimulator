@@ -1,0 +1,41 @@
+network:
+  topology_type: "hybrid_cloud_edge"
+  num_devices: 24
+  min_bandwidth: 0.1    # 100 Mbps (edge)
+  max_bandwidth: 40.0   # 40 Gbps (cloud)
+  edge_probability: 0.3
+  seed: 42
+
+resources:
+  # Log-normal distribution parameters for heterogeneous devices
+  memory_mu: 2.0
+  memory_sigma: 0.5
+  memory_min: 8.0     # Minimum 8GB RAM
+  memory_max: 128.0   # Maximum 128GB RAM
+  compute_mu: 5.0
+  compute_sigma: 0.5
+  compute_min: 50.0e9   # Minimum 50 GFLOPS
+  compute_max: 500.0e9  # Maximum 500 GFLOPS
+  seed: 42
+
+workload:
+  model_types: ["SMALL", "MEDIUM", "LARGE"]  # All model sizes
+  initial_sequence_lengths: [128, 256, 512]
+  generation_steps: [32, 64, 128]
+  precision_bytes: 4
+  seed: 42
+
+algorithm:
+  migration_threshold: 0.9
+  backtrack_limit: 100
+  cache_placement_strategy: "colocated"
+  enable_dynamic_adjustment: true
+
+experiment:
+  name: "hybrid_cloud_edge_evaluation"
+  description: "Hybrid cloud-edge evaluation with 24 devices"
+  num_runs: 10
+  checkpoint_interval: 10
+  time_limit: 10800  # 3 hours
+  metrics_output_dir: "results/hybrid_cloud_edge"
+  save_intermediate: true
