@@ -62,6 +62,18 @@ class BaseDistributor(ABC):
                 'compute_capacity': device.compute.capacity
             }
         return usage
+    
+    def _estimate_latency(
+        self,
+        assignments: Dict[str, str],
+        cache_assignments: Dict[str, str],
+        generation_step: int
+    ) -> float:
+        """
+        Default or minimal latency estimate for baseline distributors.
+        By default, return 0.0 or a naive sum, so scenario code won't fail.
+        """
+        return 0.0
 
 class GreedyDistributor(BaseDistributor):
     """
@@ -137,6 +149,32 @@ class GreedyDistributor(BaseDistributor):
             resource_usage=self._get_resource_usage(),
             is_feasible=is_feasible
         )
+    
+    def _estimate_latency(
+        self,
+        assignments: Dict[str, str],
+        cache_assignments: Dict[str, str],
+        generation_step: int
+    ) -> float:
+        # A simple approach: sum of (FLOPs/capacity) across all devices
+        # plus no communication cost. Or any naive approach you like.
+
+        # 1) compute times
+        device_compute_time = {d: 0.0 for d in self.devices}
+        for comp_id, dev_id in assignments.items():
+            device = self.devices[dev_id]
+            component = self.transformer.get_component(comp_id)
+            flops = component.compute_flops(self.transformer.current_sequence_length)
+            device_compute_time[dev_id] += flops / device.compute.capacity
+
+        # 2) total or max
+        max_compute = max(device_compute_time.values(), default=0.0)
+
+        # 3) skip or add a naive comm_time
+        comm_time = 0.0
+        # for example, do nothing or do a small sum
+
+        return max_compute + comm_time
 
 class RoundRobinDistributor(BaseDistributor):
     """
@@ -205,6 +243,32 @@ class RoundRobinDistributor(BaseDistributor):
             resource_usage=self._get_resource_usage(),
             is_feasible=True
         )
+    
+    def _estimate_latency(
+        self,
+        assignments: Dict[str, str],
+        cache_assignments: Dict[str, str],
+        generation_step: int
+    ) -> float:
+        # A simple approach: sum of (FLOPs/capacity) across all devices
+        # plus no communication cost. Or any naive approach you like.
+
+        # 1) compute times
+        device_compute_time = {d: 0.0 for d in self.devices}
+        for comp_id, dev_id in assignments.items():
+            device = self.devices[dev_id]
+            component = self.transformer.get_component(comp_id)
+            flops = component.compute_flops(self.transformer.current_sequence_length)
+            device_compute_time[dev_id] += flops / device.compute.capacity
+
+        # 2) total or max
+        max_compute = max(device_compute_time.values(), default=0.0)
+
+        # 3) skip or add a naive comm_time
+        comm_time = 0.0
+        # for example, do nothing or do a small sum
+
+        return max_compute + comm_time
 
 class StaticDistributor(BaseDistributor):
     """
@@ -261,6 +325,32 @@ class StaticDistributor(BaseDistributor):
             resource_usage=self._get_resource_usage(),
             is_feasible=is_feasible
         )
+    
+    def _estimate_latency(
+        self,
+        assignments: Dict[str, str],
+        cache_assignments: Dict[str, str],
+        generation_step: int
+    ) -> float:
+        # A simple approach: sum of (FLOPs/capacity) across all devices
+        # plus no communication cost. Or any naive approach you like.
+
+        # 1) compute times
+        device_compute_time = {d: 0.0 for d in self.devices}
+        for comp_id, dev_id in assignments.items():
+            device = self.devices[dev_id]
+            component = self.transformer.get_component(comp_id)
+            flops = component.compute_flops(self.transformer.current_sequence_length)
+            device_compute_time[dev_id] += flops / device.compute.capacity
+
+        # 2) total or max
+        max_compute = max(device_compute_time.values(), default=0.0)
+
+        # 3) skip or add a naive comm_time
+        comm_time = 0.0
+        # for example, do nothing or do a small sum
+
+        return max_compute + comm_time
 
 class DynamicMigrationDistributor(BaseDistributor):
     """
@@ -428,28 +518,6 @@ class DynamicMigrationDistributor(BaseDistributor):
                 return False
                 
         return True
-        
-    def _estimate_latency(
-        self,
-        assignments: Dict[str, str],
-        cache_assignments: Dict[str, str],
-        generation_step: int
-    ) -> float:
-        """Estimate end-to-end latency including migration costs"""
-        # Base latency calculation
-        base_latency = super()._estimate_latency(
-            assignments,
-            cache_assignments,
-            generation_step
-        )
-        
-        # Add migration overhead if components were moved
-        migration_overhead = self._calculate_migration_overhead(
-            assignments,
-            cache_assignments
-        )
-        
-        return base_latency + migration_overhead
         
     def _calculate_migration_overhead(
         self,

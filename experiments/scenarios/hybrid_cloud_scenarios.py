@@ -28,75 +28,154 @@ import numpy as np
 from datetime import datetime
 from collections import defaultdict
 
-from .common import BaseScenario, ScenarioResult, validate_scenario_requirements, collect_scenario_metrics
+from .common import (
+    BaseScenario,
+    ScenarioResult,
+    validate_scenario_requirements,
+    collect_scenario_metrics
+)
 from src.core import Network, Device, Transformer
 from src.algorithms import ResourceAwareDistributor
 from src.environment import (
     NetworkTopologyGenerator,
+    LogNormalDistribution,
     ResourceDistributor,
     WorkloadGenerator,
     HybridCloudEdgeTopology,
     WorkloadType
 )
+# Make sure SequenceConfig is available:
+from src.environment.workload import SequenceConfig
 
-class HybridCloudBasicScenario(BaseScenario):
+
+class HybridCloudBaseScenario(BaseScenario):
     """
-    Basic hybrid cloud-edge scenario testing operation with 24 devices
-    across cloud, regional, and edge tiers
+    Base scenario class for hybrid cloud-edge setups.
+    Provides a shared setup_basic_environment() to be reused by
+    specialized hybrid cloud scenarios.
     """
-    
-    def setup(self) -> None:
-        """Set up the hybrid cloud-edge environment"""
+
+    def setup_basic_environment(self) -> None:
+        """
+        Create the hybrid cloud-edge topology, resource distribution,
+        multiple or single workloads, and categorize devices by tier.
+        """
         if self.logger:
-            self.logger.log_event("setup", "Setting up hybrid cloud-edge basic scenario")
-            
-        # Create network topology
-        topology_generator = HybridCloudEdgeTopology(self.config.network)
-        self.network = topology_generator.generate()
-        
-        # Set up resource distribution
+            self.logger.log_event("setup", "Setting up basic environment for hybrid cloud-edge")
+
+        # 1. Create network topology
+        topo_generator = HybridCloudEdgeTopology(self.config.network)
+        self.network = topo_generator.generate()
+
+        # 2. Convert config.resources into LogNormalDistribution
+        mem_dist = LogNormalDistribution(
+            mu=self.config.resources.memory_mu,
+            sigma=self.config.resources.memory_sigma,
+            min_value=self.config.resources.memory_min,
+            max_value=self.config.resources.memory_max
+        )
+        comp_dist = LogNormalDistribution(
+            mu=self.config.resources.compute_mu,
+            sigma=self.config.resources.compute_sigma,
+            min_value=self.config.resources.compute_min,
+            max_value=self.config.resources.compute_max
+        )
+
         resource_distributor = ResourceDistributor(
-            num_devices=24,
-            memory_distribution=self.config.resources.memory_distribution,
-            compute_distribution=self.config.resources.compute_distribution
+            num_devices=self.config.network.num_devices,  # e.g. 24
+            memory_distribution=mem_dist,
+            compute_distribution=comp_dist,
+            seed=self.config.resources.seed
         )
         self.device_capabilities = resource_distributor.generate_capabilities()
-        
-        # Create devices
-        self.devices = {
-            device_id: Device(
+
+        # 3. Create Device objects
+        self.devices = {}
+        for device_id, caps in self.device_capabilities.items():
+            self.devices[device_id] = Device(
                 device_id=device_id,
                 memory_capacity=caps.memory_capacity,
                 compute_capacity=caps.compute_capacity,
                 is_source=caps.is_source
             )
-            for device_id, caps in self.device_capabilities.items()
-        }
-        
-        # Categorize devices by tier
+
+        # 4. Categorize devices by tier
+        #    You can define any logic you want. For demonstration, we pick
+        #    the first 4 as cloud, next 8 as regional, rest as edge.
+        device_ids_sorted = sorted(self.devices.keys())  # e.g. device_0..device_23
         self.device_tiers = {
-            'cloud': self.devices.keys()[:4],     # First 4 devices are cloud
-            'regional': self.devices.keys()[4:12], # Next 8 are regional
-            'edge': self.devices.keys()[12:]       # Last 12 are edge
+            'cloud': device_ids_sorted[:4],
+            'regional': device_ids_sorted[4:12],
+            'edge': device_ids_sorted[12:]
         }
-        
-        # Set up workloads - using all model sizes
-        self.workload_generator = WorkloadGenerator()
-        self.workloads = [
-            self.workload_generator.generate_workload(
-                workload_type,
-                self.config.workload.sequence_config
+
+        # 5. Workload generation
+        self.workload_generator = WorkloadGenerator(seed=self.config.workload.seed)
+        self.workloads = []
+
+        # Check if multiple or single model types
+        if hasattr(self.config.workload, "model_types") and self.config.workload.model_types:
+            # multiple
+            for mtype in self.config.workload.model_types:
+                # define a default SequenceConfig from the first elements
+                seq_cfg = SequenceConfig(
+                    initial_length=self.config.workload.initial_sequence_lengths[0],
+                    num_steps=self.config.workload.generation_steps[0],
+                    precision_bytes=self.config.workload.precision_bytes
+                )
+                w = self.workload_generator.generate_workload(
+                    workload_type=WorkloadType[mtype],
+                    sequence_config=seq_cfg
+                )
+                self.workloads.append(w)
+        else:
+            # single
+            # define default SequenceConfig from e.g. first element
+            if hasattr(self.config.workload, "model_type"):
+                single_type = self.config.workload.model_type
+            else:
+                single_type = WorkloadType.SMALL  # fallback
+            seq_cfg = SequenceConfig(
+                initial_length=self.config.workload.initial_sequence_lengths[0],
+                num_steps=self.config.workload.generation_steps[0],
+                precision_bytes=self.config.workload.precision_bytes
             )
-            for workload_type in WorkloadType
-        ]
-        
-        # Initialize algorithm
+            w = self.workload_generator.generate_workload(
+                workload_type=single_type,
+                sequence_config=seq_cfg
+            )
+            self.workloads.append(w)
+
+        # 6. Validate scenario requirements with a sample transformer
+        test_transformer = Transformer(self.workloads[0].transformer.config)
+        if not validate_scenario_requirements(
+            self.config,
+            self.network,
+            self.devices,
+            test_transformer
+        ):
+            raise ValueError("Scenario requirements not met in hybrid cloud-edge environment setup.")
+
+        # 7. Initialize ResourceAwareDistributor with the first workload's transformer
         self.distributor = ResourceAwareDistributor(
-            self.workloads[0].transformer,  # Start with small model
+            self.workloads[0].transformer,
             self.network,
             self.devices
         )
-        
+
+
+class HybridCloudBasicScenario(HybridCloudBaseScenario):
+    """
+    Basic hybrid cloud-edge scenario testing operation with 24 devices
+    across cloud, regional, and edge tiers
+    """
+
+    def setup(self) -> None:
+        """Set up the hybrid cloud-edge environment"""
+        if self.logger:
+            self.logger.log_event("setup", "Setting up hybrid cloud-edge basic scenario")
+        self.setup_basic_environment()
+
     def run(self) -> ScenarioResult:
         """Run the basic hybrid cloud-edge scenario"""
         metrics = {
@@ -105,30 +184,32 @@ class HybridCloudBasicScenario(BaseScenario):
             'performance_metrics': {},
             'tier_metrics': defaultdict(dict)
         }
-        
+
         try:
-            # Run each workload type
-            for workload_idx, workload in enumerate(self.workloads):
+            # We'll run each workload in self.workloads
+            for idx, workload in enumerate(self.workloads):
                 self.distributor.transformer = workload.transformer
-                workload_metrics = self._run_workload_with_tier_tracking(
-                    workload,
-                    workload_idx
-                )
-                
-                # Record workload-specific metrics
-                metrics[f'workload_{workload_idx}'] = workload_metrics
-                
-                # Update tier-specific metrics
-                self._update_tier_metrics(workload_metrics, metrics['tier_metrics'])
-                
+                w_metrics = self._run_workload_with_tier_tracking(workload, idx)
+
+                metrics[f'workload_{idx}'] = w_metrics
+                self._update_tier_metrics(w_metrics, metrics['tier_metrics'])
+
+            final_metrics = collect_scenario_metrics(
+                resource_metrics=metrics['resource_metrics'],
+                communication_metrics=metrics['communication_metrics'],
+                performance_metrics=metrics['performance_metrics']
+            )
+            # Optionally attach the tier_metrics or the entire metrics dict
+            final_metrics['tier_metrics'] = metrics['tier_metrics']
+
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                metrics=collect_scenario_metrics(**metrics),
+                metrics=final_metrics,
                 success=True
             )
-            
+
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -140,48 +221,114 @@ class HybridCloudBasicScenario(BaseScenario):
                 success=False,
                 error=str(e)
             )
-            
+
     def _update_tier_metrics(
         self,
         workload_metrics: Dict,
         tier_metrics: Dict
     ) -> None:
-        """Update metrics for each tier"""
+        """
+        Given the metrics from one run of a workload,
+        aggregate stats by tier for the final scenario result.
+        """
         for tier, devices in self.device_tiers.items():
-            # Calculate tier utilization
-            tier_metrics[tier]['utilization'] = np.mean([
-                workload_metrics['resource_metrics'][step][device_id]['compute_utilization']
-                for step in workload_metrics['resource_metrics']
-                for device_id in devices
-            ])
-            
-            # Calculate tier assignment frequency
-            tier_metrics[tier]['assignments'] = sum(
-                1 for assignments in workload_metrics['component_assignments'].values()
-                for device_id in assignments.values()
-                if device_id in devices
+            # Example: compute average compute utilization across all steps & devices
+            util_vals = []
+            # 'resource_metrics' is step -> {dev_id: {...}} in workload_metrics
+            for step_data in workload_metrics['resource_metrics'].values():
+                for d_id in devices:
+                    if d_id in step_data:
+                        u = step_data[d_id].get('compute_utilization', 0.0)
+                        util_vals.append(u)
+
+            if util_vals:
+                avg_util = float(np.mean(util_vals))
+            else:
+                avg_util = 0.0
+
+            # store in tier_metrics e.g. tier_metrics[tier]['utilization'] = ...
+            if 'utilization' not in tier_metrics[tier]:
+                tier_metrics[tier]['utilization'] = []
+            tier_metrics[tier]['utilization'].append(avg_util)
+
+            # Example: track number of assigned components
+            if 'assignments' not in tier_metrics[tier]:
+                tier_metrics[tier]['assignments'] = 0
+
+            # each step has 'component_assignments'
+            if 'component_assignments' in workload_metrics:
+                for step_idx, cassign in workload_metrics['component_assignments'].items():
+                    # cassign is a dict of comp -> device
+                    for comp, dev_id in cassign.items():
+                        if dev_id in devices:
+                            tier_metrics[tier]['assignments'] += 1
+
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        if self.logger:
+            self.logger.log_event("cleanup", "Cleaning up hybrid cloud basic scenario")
+
+
+    def _run_workload_with_tier_tracking(
+        self,
+        workload,
+        workload_idx: int
+    ) -> Dict:
+        """Run a workload while tracking tier-specific metrics"""
+        wmetrics = {
+            'resource_metrics': {},
+            'performance_metrics': {},
+            'component_assignments': {}
+        }
+
+        for step in range(workload.sequence_config.num_steps):
+            assignment_result = self.distributor.compute_assignment(
+                generation_step=step,
+                previous_assignments=wmetrics.get('previous_assignments'),
+                previous_cache=wmetrics.get('previous_cache')
             )
 
-class HybridCloudTierBalancingScenario(BaseScenario):
+            if not assignment_result.is_feasible:
+                raise RuntimeError(
+                    f"Infeasible assignment at step {step} for workload {workload_idx}"
+                )
+
+            # Record resource usage
+            wmetrics['resource_metrics'][step] = assignment_result.resource_usage
+            wmetrics['component_assignments'][step] = assignment_result.component_assignments
+            wmetrics['previous_assignments'] = assignment_result.component_assignments
+            wmetrics['previous_cache'] = assignment_result.cache_assignments
+
+            # Performance
+            wmetrics['performance_metrics'][step] = {
+                'latency': assignment_result.estimated_latency,
+                'step': step
+            }
+
+        return wmetrics
+
+
+class HybridCloudTierBalancingScenario(HybridCloudBaseScenario):
     """
     Tests workload balancing across cloud, regional, and edge tiers
     """
-    
+
     def setup(self) -> None:
         """Set up tier balancing test environment"""
-        super().setup()
-        
-        # Initialize tier tracking
+        if self.logger:
+            self.logger.log_event("setup", "Setting up hybrid cloud tier balancing scenario")
+        self.setup_basic_environment()
+
+        # Example: Tier tracker or extra data if needed
         self.tier_tracker = {
             tier: {
                 'compute_usage': [],
                 'memory_usage': [],
-                'bandwidth_usage': [],
                 'component_assignments': defaultdict(int)
             }
             for tier in ['cloud', 'regional', 'edge']
         }
-        
+
     def run(self) -> ScenarioResult:
         """Run tier balancing analysis"""
         metrics = {
@@ -190,25 +337,30 @@ class HybridCloudTierBalancingScenario(BaseScenario):
             'performance_metrics': {},
             'tier_balance_metrics': {}
         }
-        
+
         try:
-            # Test each model size
             for workload in self.workloads:
                 self.distributor.transformer = workload.transformer
-                tier_metrics = self._run_tier_balanced_workload(workload)
-                
-                # Record tier-specific metrics
+                tmetrics = self._run_tier_balanced_workload(workload)
+
                 metrics['tier_balance_metrics'][workload.workload_type.name] = \
-                    self._analyze_tier_balance(tier_metrics)
-                
+                    self._analyze_tier_balance(tmetrics)
+
+            final_metrics = collect_scenario_metrics(
+                resource_metrics=metrics['resource_metrics'],
+                communication_metrics=metrics['communication_metrics'],
+                performance_metrics=metrics['performance_metrics']
+            )
+            final_metrics['tier_balance_metrics'] = metrics['tier_balance_metrics']
+
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                metrics=collect_scenario_metrics(**metrics),
+                metrics=final_metrics,
                 success=True
             )
-            
+
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -220,96 +372,107 @@ class HybridCloudTierBalancingScenario(BaseScenario):
                 success=False,
                 error=str(e)
             )
-            
+
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        if self.logger:
+            self.logger.log_event("cleanup", "Cleaning up hybrid cloud tier balancing scenario")
+
     def _run_tier_balanced_workload(self, workload) -> Dict:
-        """Run workload with tier balancing analysis"""
-        tier_metrics = defaultdict(lambda: defaultdict(list))
-        
+        """
+        Run the workload, collecting data about tier usage.
+        For example, we track compute usage by tier at each step.
+        """
+        tmetrics = defaultdict(lambda: defaultdict(list))
+        # so tmetrics[tier]['compute_usage'] -> list
+        # tmetrics[tier]['memory_usage'] -> list
+        # tmetrics[tier]['component_assignments'] -> defaultdict(int), etc.
+
         for step in range(workload.sequence_config.num_steps):
             assignment_result = self.distributor.compute_assignment(
-                step,
-                previous_assignments=tier_metrics.get('previous_assignments'),
-                previous_cache=tier_metrics.get('previous_cache')
+                generation_step=step,
+                previous_assignments=tmetrics.get('previous_assignments'),
+                previous_cache=tmetrics.get('previous_cache')
             )
-            
-            # Track tier-specific metrics
-            for tier, devices in self.device_tiers.items():
-                self._track_tier_metrics(
-                    tier,
-                    devices,
-                    assignment_result,
-                    tier_metrics[tier]
-                )
-                
-            # Update assignments
-            tier_metrics['previous_assignments'] = assignment_result.component_assignments
-            tier_metrics['previous_cache'] = assignment_result.cache_assignments
-            
-        return tier_metrics
-            
-    def _track_tier_metrics(
-        self,
-        tier: str,
-        devices: Set[str],
-        assignment_result: Dict,
-        metrics: Dict
-    ) -> None:
-        """Track metrics for a specific tier"""
-        # Resource usage
-        metrics['compute_usage'].append(np.mean([
-            assignment_result.resource_usage[dev_id]['compute_utilization']
-            for dev_id in devices
-        ]))
-        
-        metrics['memory_usage'].append(np.mean([
-            assignment_result.resource_usage[dev_id]['memory_utilization']
-            for dev_id in devices
-        ]))
-        
-        # Component assignments
-        for comp_id, dev_id in assignment_result.component_assignments.items():
-            if dev_id in devices:
-                metrics['component_assignments'][comp_id] += 1
-                
-    def _analyze_tier_balance(self, tier_metrics: Dict) -> Dict:
-        """Analyze tier balance metrics"""
-        return {
-            tier: {
-                'average_compute': np.mean(metrics['compute_usage']),
-                'average_memory': np.mean(metrics['memory_usage']),
-                'assignment_distribution': dict(metrics['component_assignments']),
-                'load_balance_index': self._calculate_balance_index(
-                    metrics['compute_usage']
-                )
-            }
-            for tier, metrics in tier_metrics.items()
-        }
-        
+
+            # track usage
+            for tier, dev_ids in self.device_tiers.items():
+                cu_list = []
+                mu_list = []
+                for d_id in dev_ids:
+                    usage = assignment_result.resource_usage.get(d_id, {})
+                    cu = usage.get('compute_utilization', 0.0)
+                    mu = usage.get('memory_utilization', 0.0)
+                    cu_list.append(cu)
+                    mu_list.append(mu)
+                avg_cu = float(np.mean(cu_list)) if cu_list else 0.0
+                avg_mu = float(np.mean(mu_list)) if mu_list else 0.0
+                tmetrics[tier]['compute_usage'].append(avg_cu)
+                tmetrics[tier]['memory_usage'].append(avg_mu)
+
+                # track assignment distribution
+                for comp_id, dev_id in assignment_result.component_assignments.items():
+                    if dev_id in dev_ids:
+                        tmetrics[tier]['component_assignments'][comp_id] += 1
+
+            tmetrics['previous_assignments'] = assignment_result.component_assignments
+            tmetrics['previous_cache'] = assignment_result.cache_assignments
+
+        return tmetrics
+
+    def _analyze_tier_balance(self, tmetrics: Dict) -> Dict:
+        """
+        Perform some analysis on usage distribution and assignment patterns.
+        """
+        results = {}
+        for tier, data in tmetrics.items():
+            if tier in ['previous_assignments', 'previous_cache']:
+                continue
+            # data['compute_usage'], data['memory_usage'], data['component_assignments']
+            if isinstance(data, dict):
+                cu_vals = data.get('compute_usage', [])
+                mu_vals = data.get('memory_usage', [])
+                comp_dict = data.get('component_assignments', {})
+
+                results[tier] = {
+                    'average_compute': float(np.mean(cu_vals)) if cu_vals else 0.0,
+                    'average_memory': float(np.mean(mu_vals)) if mu_vals else 0.0,
+                    'assignment_distribution': dict(comp_dict),
+                    'balance_index': self._calculate_balance_index(cu_vals)
+                }
+        return results
+
     def _calculate_balance_index(self, utilization_values: List[float]) -> float:
-        """Calculate load balance index (0 = perfect balance, 1 = imbalanced)"""
+        """
+        Calculate some measure of how balanced the usage is.
+        E.g., a ratio of standard deviation to mean.
+        """
         if not utilization_values:
             return 0.0
-        mean_util = np.mean(utilization_values)
-        if mean_util == 0:
+        mean_val = float(np.mean(utilization_values))
+        if mean_val == 0:
             return 0.0
-        return np.std(utilization_values) / mean_util
+        return float(np.std(utilization_values) / mean_val)
 
-class HybridCloudLatencyScenario(BaseScenario):
+
+class HybridCloudLatencyScenario(HybridCloudBaseScenario):
     """
     Tests latency characteristics across different tiers and bandwidths
     """
-    
+
     def setup(self) -> None:
         """Set up latency test environment"""
-        super().setup()
-        
-        # Initialize latency tracking
+        if self.logger:
+            self.logger.log_event("setup", "Setting up hybrid cloud latency scenario")
+        self.setup_basic_environment()
+
+        # Initialize latency tracking if needed
         self.latency_tracker = {
-            'intra_tier': defaultdict(list),   # Within same tier
-            'inter_tier': defaultdict(list),   # Between tiers
-            'edge_to_cloud': defaultdict(list) # Edge to cloud specific
+            'intra_tier': defaultdict(list),
+            'inter_tier': defaultdict(list),
+            'edge_to_cloud': defaultdict(list)
         }
-        
+
     def run(self) -> ScenarioResult:
         """Run latency analysis"""
         metrics = {
@@ -318,25 +481,30 @@ class HybridCloudLatencyScenario(BaseScenario):
             'performance_metrics': {},
             'latency_analysis': {}
         }
-        
+
         try:
-            # Run workloads with latency tracking
+            # Example: run each workload
             for workload in self.workloads:
                 self.distributor.transformer = workload.transformer
-                latency_metrics = self._run_latency_analysis(workload)
-                
-                # Record latency metrics
+                lat_metrics = self._run_latency_analysis(workload)
                 metrics['latency_analysis'][workload.workload_type.name] = \
-                    self._analyze_latency_patterns(latency_metrics)
-                
+                    self._analyze_latency_patterns(lat_metrics)
+
+            final_metrics = collect_scenario_metrics(
+                resource_metrics=metrics['resource_metrics'],
+                communication_metrics=metrics['communication_metrics'],
+                performance_metrics=metrics['performance_metrics']
+            )
+            final_metrics['latency_analysis'] = metrics['latency_analysis']
+
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                metrics=collect_scenario_metrics(**metrics),
+                metrics=final_metrics,
                 success=True
             )
-            
+
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -348,191 +516,138 @@ class HybridCloudLatencyScenario(BaseScenario):
                 success=False,
                 error=str(e)
             )
-            
+
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        if self.logger:
+            self.logger.log_event("cleanup", "Cleaning up hybrid cloud latency scenario")
+
     def _run_latency_analysis(self, workload) -> Dict:
-        """Run workload with detailed latency tracking"""
-        latency_metrics = {
+        """
+        For each generation step, gather assignments, measure comm latencies, etc.
+        Return a structure from which we can compute stats (mean, p95, etc.).
+        """
+        lat_metrics = {
             'communication_latency': defaultdict(list),
             'processing_latency': defaultdict(list),
-            'total_latency': defaultdict(list)
+            'total_latency': defaultdict(list),
+            'previous_assignments': {},
+            'previous_cache': {}
         }
-        
+
         for step in range(workload.sequence_config.num_steps):
-            # Get assignments
             assignment_result = self.distributor.compute_assignment(
-                step,
-                previous_assignments=latency_metrics.get('previous_assignments'),
-                previous_cache=latency_metrics.get('previous_cache')
+                generation_step=step,
+                previous_assignments=lat_metrics['previous_assignments'],
+                previous_cache=lat_metrics['previous_cache']
             )
-            
-            # Track latencies
-            self._track_latencies(
-                step,
-                assignment_result,
-                latency_metrics
-            )
-            
-            # Update assignments
-            latency_metrics['previous_assignments'] = \
-                assignment_result.component_assignments
-            latency_metrics['previous_cache'] = assignment_result.cache_assignments
-            
-        return latency_metrics
-            
+
+            # track latencies
+            self._track_latencies(step, assignment_result, lat_metrics)
+
+            lat_metrics['previous_assignments'] = assignment_result.component_assignments
+            lat_metrics['previous_cache'] = assignment_result.cache_assignments
+
+        return lat_metrics
+
     def _track_latencies(
         self,
         step: int,
-        assignment_result: Dict,
-        metrics: Dict
+        assignment_result,
+        lat_metrics
     ) -> None:
-        """Track various types of latencies"""
-        # Track communication latencies between tiers
+        """
+        Example: track communication latencies by tier transitions, etc.
+        """
         for comp_id, dev_id in assignment_result.component_assignments.items():
             source_tier = self._get_device_tier(dev_id)
-            
-            # Track dependencies
+            # Suppose we track dependencies:
             for dep_id in self._get_component_dependencies(comp_id):
                 if dep_id in assignment_result.component_assignments:
-                    dep_dev_id = assignment_result.component_assignments[dep_id]
-                    dep_tier = self._get_device_tier(dep_dev_id)
-                    
-                    # Calculate communication latency
-                    latency = self.network.calculate_transfer_time(
-                        dev_id,
-                        dep_dev_id,
-                        self._estimate_transfer_size(comp_id, dep_id)
+                    dep_dev = assignment_result.component_assignments[dep_id]
+                    dep_tier = self._get_device_tier(dep_dev)
+                    # compute data size
+                    data_size = self._estimate_transfer_size(comp_id, dep_id)
+                    # compute link time
+                    link_time = self.network.calculate_transfer_time(
+                        dev_id, dep_dev, data_size
                     )
-                    
+
                     if source_tier == dep_tier:
-                        metrics['communication_latency']['intra_tier'].append(latency)
+                        lat_metrics['communication_latency']['intra_tier'].append(link_time)
                     else:
-                        metrics['communication_latency']['inter_tier'].append(latency)
-                        
+                        lat_metrics['communication_latency']['inter_tier'].append(link_time)
                         if source_tier == 'edge' and dep_tier == 'cloud':
-                            metrics['communication_latency']['edge_to_cloud'].append(latency)
-                            
+                            lat_metrics['communication_latency']['edge_to_cloud'].append(link_time)
+
+    def _analyze_latency_patterns(self, lat_metrics: Dict) -> Dict:
+        """
+        Summarize stats for the recorded latencies in lat_metrics['communication_latency'].
+        """
+        comm_lat = lat_metrics['communication_latency']
+        analysis = {}
+
+        for key in ['intra_tier', 'inter_tier', 'edge_to_cloud']:
+            arr = comm_lat[key]
+            if arr:
+                arr_np = np.array(arr, dtype=float)
+                analysis[f"{key}_mean"] = float(np.mean(arr_np))
+                analysis[f"{key}_std"] = float(np.std(arr_np))
+                analysis[f"{key}_p95"] = float(np.percentile(arr_np, 95))
+            else:
+                analysis[f"{key}_mean"] = 0.0
+                analysis[f"{key}_std"] = 0.0
+                analysis[f"{key}_p95"] = 0.0
+
+        return analysis
+
     def _get_device_tier(self, device_id: str) -> str:
-        """Get the tier of a device"""
-        for tier, devices in self.device_tiers.items():
-            if device_id in devices:
+        """
+        Return 'cloud', 'regional', or 'edge' if device_id is in that group,
+        else 'unknown'.
+        """
+        for tier, dev_ids in self.device_tiers.items():
+            if device_id in dev_ids:
                 return tier
         return 'unknown'
-        
-    def _analyze_latency_patterns(self, metrics: Dict) -> Dict:
-        """Analyze latency patterns across tiers"""
-        return {
-            'intra_tier_latency': {
-                'mean': np.mean(metrics['communication_latency']['intra_tier']),
-                'std': np.std(metrics['communication_latency']['intra_tier']),
-                'p95': np.percentile(metrics['communication_latency']['intra_tier'], 95)
-            },
-            'inter_tier_latency': {
-                'mean': np.mean(metrics['communication_latency']['inter_tier']),
-                'std': np.std(metrics['communication_latency']['inter_tier']),
-                'p95': np.percentile(metrics['communication_latency']['inter_tier'], 95)
-            },
-            'edge_to_cloud_latency': {
-                'mean': np.mean(metrics['communication_latency']['edge_to_cloud']),
-                'std': np.std(metrics['communication_latency']['edge_to_cloud']),
-                'p95': np.percentile(metrics['communication_latency']['edge_to_cloud'], 95)
-            }
-        }
-    
+
     def _get_component_dependencies(self, component_id: str) -> List[str]:
-        """Get dependencies for a component"""
+        """
+        Example logic for dependencies (similar to your code).
+        """
         dependencies = []
-        
         if component_id.startswith('head_'):
-            # Attention head dependencies
             dependencies.extend([
-                f'cache_{component_id}',  # K/V cache dependency
-                'projection'              # Output goes to projection layer
+                f'cache_{component_id}',
+                'projection'
             ])
         elif component_id == 'projection':
-            # Projection layer depends on all attention heads
-            dependencies.extend([
-                f'head_{i}' 
-                for i in range(self.distributor.transformer.config.num_heads)
-            ])
+            # depends on all heads
+            heads_count = self.distributor.transformer.config.num_heads
+            dependencies.extend([f'head_{i}' for i in range(heads_count)])
         elif component_id == 'ffn':
-            # FFN depends on projection output
             dependencies.append('projection')
-            
         return dependencies
-        
+
     def _estimate_transfer_size(
         self,
-        component_id: str,
-        dependency_id: str
+        comp_id: str,
+        dep_id: str
     ) -> float:
-        """Estimate size of data transfer between components in GB"""
+        """
+        Example logic for data size in GB.
+        """
         transformer = self.distributor.transformer
-        
-        if dependency_id.startswith('cache_'):
-            # K/V cache transfer size
-            return (transformer.current_sequence_length * 
-                   transformer.config.head_dim * 
-                   transformer.config.precision_bytes * 2) / (1024**3)
-            
-        elif component_id == 'projection' and dependency_id.startswith('head_'):
-            # Attention head output size
-            return (transformer.current_sequence_length * 
-                   transformer.config.head_dim * 
-                   transformer.config.precision_bytes) / (1024**3)
-            
-        elif component_id == 'ffn' and dependency_id == 'projection':
-            # Projection output size
-            return (transformer.current_sequence_length * 
-                   transformer.config.embedding_dim * 
-                   transformer.config.precision_bytes) / (1024**3)
-            
+        seq_len = transformer.current_sequence_length
+        head_dim = transformer.config.head_dim
+        emb_dim = transformer.config.embedding_dim
+        prec_bytes = transformer.config.precision_bytes
+
+        if dep_id.startswith('cache_'):
+            # K/V cache
+            return (seq_len * head_dim * prec_bytes * 2) / (1024**3)
+        elif comp_id == 'projection' and dep_id.startswith('head_'):
+            return (seq_len * head_dim * prec_bytes) / (1024**3)
+        elif comp_id == 'ffn' and dep_id == 'projection':
+            return (seq_len * emb_dim * prec_bytes) / (1024**3)
         return 0.0
-        
-    def _run_workload_with_tier_tracking(
-        self,
-        workload,
-        workload_idx: int
-    ) -> Dict:
-        """Run a workload while tracking tier-specific metrics"""
-        metrics = {
-            'resource_metrics': {},
-            'communication_metrics': {},
-            'performance_metrics': {},
-            'component_assignments': {},
-            'tier_utilization': defaultdict(list)
-        }
-        
-        for step in range(workload.sequence_config.num_steps):
-            # Get assignments
-            assignment_result = self.distributor.compute_assignment(
-                step,
-                previous_assignments=metrics.get('previous_assignments'),
-                previous_cache=metrics.get('previous_cache')
-            )
-            
-            if not assignment_result.is_feasible:
-                raise RuntimeError(
-                    f"Infeasible assignment at step {step} for workload {workload_idx}"
-                )
-                
-            # Record metrics
-            metrics['resource_metrics'][step] = assignment_result.resource_usage
-            metrics['component_assignments'][step] = assignment_result.component_assignments
-            metrics['previous_assignments'] = assignment_result.component_assignments
-            metrics['previous_cache'] = assignment_result.cache_assignments
-            
-            # Record tier utilization
-            for tier, devices in self.device_tiers.items():
-                tier_util = np.mean([
-                    assignment_result.resource_usage[dev_id]['compute_utilization']
-                    for dev_id in devices
-                ])
-                metrics['tier_utilization'][tier].append(tier_util)
-                
-            # Record performance metrics
-            metrics['performance_metrics'][step] = {
-                'latency': assignment_result.estimated_latency,
-                'step': step
-            }
-            
-        return metrics

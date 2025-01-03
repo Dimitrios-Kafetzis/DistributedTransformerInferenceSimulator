@@ -81,6 +81,7 @@ class Network:
     ) -> None:
         """
         Add a network link between devices.
+        For an undirected graph, store both (source, target) and (target, source).
         
         :param source:      ID of the source device
         :param target:      ID of the target device
@@ -92,9 +93,9 @@ class Network:
         self.topology.add_edge(source, target, bandwidth=bandwidth)
         self.links[(source, target)] = Link(bandwidth=bandwidth)
         
-        # Only add target -> source if requested
-        if bidirectional:
-            self.topology.add_edge(target, source)
+        # If using an undirected graph, or user specified bidirectional in a DiGraph:
+        if not self.topology.is_directed() or bidirectional:
+            self.topology.add_edge(target, source, bandwidth=bandwidth)
             self.links[(target, source)] = Link(bandwidth=bandwidth)
     
     def get_path(self, source: str, target: str) -> List[str]:

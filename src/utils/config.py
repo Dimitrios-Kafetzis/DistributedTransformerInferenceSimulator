@@ -94,17 +94,78 @@ class SimulationConfig:
     
     @classmethod
     def from_dict(cls, config_dict: Dict) -> 'SimulationConfig':
-        """Create configuration from dictionary"""
+        """
+        Create configuration from dictionary.
+        Force-convert resource fields to float to avoid
+        'ufunc clip signature mismatch' errors.
+        """
+        # Make a local shorter reference for read
+        r = config_dict['resources']
+
+        # Example: forcibly convert resource fields to float
+        resources = ResourceConfig(
+            memory_mu=float(r['memory_mu']),
+            memory_sigma=float(r['memory_sigma']),
+            memory_min=float(r['memory_min']),
+            memory_max=float(r['memory_max']),
+            compute_mu=float(r['compute_mu']),
+            compute_sigma=float(r['compute_sigma']),
+            compute_min=float(r['compute_min']),
+            compute_max=float(r['compute_max']),
+            seed=r.get('seed', None)
+        )
+
+        # For workload, you can do an if-check:
+        w = config_dict['workload']
+        # If you prefer single `model_type` usage:
+        #   model_type = WorkloadType[w['model_type']]
+        # Or if the file uses multiple model_types, handle accordingly.
+        # Just ensure we handle the correct field.
+
+        # The rest remains:
+        workload = WorkloadConfig(
+            model_type=WorkloadType[w['model_type']],
+            initial_sequence_lengths=w['initial_sequence_lengths'],
+            generation_steps=w['generation_steps'],
+            precision_bytes=w.get('precision_bytes', 4),
+            seed=w.get('seed', None)
+        )
+
+        net = config_dict['network']
+        network = NetworkConfig(
+            topology_type=net['topology_type'],
+            num_devices=int(net['num_devices']),
+            min_bandwidth=float(net['min_bandwidth']),
+            max_bandwidth=float(net['max_bandwidth']),
+            edge_probability=float(net.get('edge_probability', 0.3)),
+            seed=net.get('seed', None)
+        )
+
+        alg = config_dict['algorithm']
+        algorithm = AlgorithmConfig(
+            migration_threshold=float(alg['migration_threshold']),
+            backtrack_limit=int(alg['backtrack_limit']),
+            cache_placement_strategy=alg['cache_placement_strategy'],
+            enable_dynamic_adjustment=alg['enable_dynamic_adjustment']
+        )
+
+        exp = config_dict['experiment']
+        experiment = ExperimentConfig(
+            name=exp['name'],
+            description=exp['description'],
+            num_runs=int(exp.get('num_runs', 1)),
+            checkpoint_interval=int(exp.get('checkpoint_interval', 10)),
+            time_limit=float(exp.get('time_limit', float('inf'))),
+            metrics_output_dir=exp.get('metrics_output_dir', 'results'),
+            save_intermediate=bool(exp.get('save_intermediate', False))
+        )
+
         return cls(
-            network=NetworkConfig(**config_dict['network']),
-            resources=ResourceConfig(**config_dict['resources']),
-            workload=WorkloadConfig(
-                model_type=WorkloadType[config_dict['workload']['model_type']],
-                **{k: v for k, v in config_dict['workload'].items() 
-                   if k != 'model_type'}
-            ),
-            algorithm=AlgorithmConfig(**config_dict['algorithm']),
-            experiment=ExperimentConfig(**config_dict['experiment'])
+            network=network,
+            resources=resources,
+            workload=workload,
+            algorithm=algorithm,
+            experiment=experiment
         )
     
     def to_dict(self) -> Dict:

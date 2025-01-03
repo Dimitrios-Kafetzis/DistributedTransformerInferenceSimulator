@@ -37,7 +37,7 @@ resources:
   seed: 42
 
 workload:
-  model_types: ["SMALL", "MEDIUM", "LARGE"]  # All model sizes
+  model_type: "LARGE"  
   initial_sequence_lengths: [128, 256, 512]
   generation_steps: [32, 64, 128]
   precision_bytes: 4

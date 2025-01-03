@@ -144,7 +144,7 @@ class ResourceDistributor:
         # Generate compute capacities
         compute_capacities = np.clip(
             self.compute_dist.sample(num_devices) * compute_multiplier,
-            10.0, 100.0  # whatever range you want for compute
+            10.0e9, 100.0e9  # whatever range you want for compute between 10 GFLOPs to 100GFLOPs
         )
         
         # Create DeviceCapabilities objects

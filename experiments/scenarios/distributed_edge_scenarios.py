@@ -26,69 +26,145 @@ from typing import Dict, List, Optional
 import numpy as np
 from datetime import datetime
 
-from .common import BaseScenario, ScenarioResult, validate_scenario_requirements, collect_scenario_metrics
+from .common import (
+    BaseScenario,
+    ScenarioResult,
+    validate_scenario_requirements,
+    collect_scenario_metrics
+)
 from src.core import Network, Device, Transformer
 from src.algorithms import ResourceAwareDistributor
 from src.environment import (
     NetworkTopologyGenerator,
+    LogNormalDistribution,
     ResourceDistributor,
     WorkloadGenerator,
     DistributedEdgeTopology,
     WorkloadType
 )
+# Make sure SequenceConfig is available:
+from src.environment.workload import SequenceConfig
 
-class DistributedEdgeBasicScenario(BaseScenario):
+
+class DistributedEdgeBaseScenario(BaseScenario):
     """
-    Basic distributed edge scenario testing operation with 16 devices
+    Base scenario class for distributed edge experiments.
+    Provides a shared setup_basic_environment() to avoid code duplication.
     """
-    
-    def setup(self) -> None:
-        """Set up the distributed edge environment"""
+
+    def setup_basic_environment(self) -> None:
+        """
+        Creates a distributed edge topology, resource distribution,
+        and sets up workloads (possibly multiple) based on config.
+        """
         if self.logger:
-            self.logger.log_event("setup", "Setting up distributed edge basic scenario")
-            
-        # Create network topology
-        topology_generator = DistributedEdgeTopology(self.config.network)
-        self.network = topology_generator.generate()
-        
-        # Set up resource distribution
+            self.logger.log_event("setup", "Setting up basic environment for distributed edge")
+
+        # 1. Create network topology
+        topo_generator = DistributedEdgeTopology(self.config.network)
+        self.network = topo_generator.generate()
+
+        # 2. Create resource distributions from config
+        mem_dist = LogNormalDistribution(
+            mu=self.config.resources.memory_mu,
+            sigma=self.config.resources.memory_sigma,
+            min_value=self.config.resources.memory_min,
+            max_value=self.config.resources.memory_max
+        )
+        comp_dist = LogNormalDistribution(
+            mu=self.config.resources.compute_mu,
+            sigma=self.config.resources.compute_sigma,
+            min_value=self.config.resources.compute_min,
+            max_value=self.config.resources.compute_max
+        )
+
         resource_distributor = ResourceDistributor(
-            num_devices=16,
-            memory_distribution=self.config.resources.memory_distribution,
-            compute_distribution=self.config.resources.compute_distribution
+            num_devices=self.config.network.num_devices,  # e.g. 16
+            memory_distribution=mem_dist,
+            compute_distribution=comp_dist,
+            seed=self.config.resources.seed
         )
         self.device_capabilities = resource_distributor.generate_capabilities()
-        
-        # Create devices
-        self.devices = {
-            device_id: Device(
+
+        # 3. Create devices
+        self.devices = {}
+        for device_id, caps in self.device_capabilities.items():
+            self.devices[device_id] = Device(
                 device_id=device_id,
                 memory_capacity=caps.memory_capacity,
                 compute_capacity=caps.compute_capacity,
                 is_source=caps.is_source
             )
-            for device_id, caps in self.device_capabilities.items()
-        }
-        
-        # Set up workload - using both small and medium models
-        self.workload_generator = WorkloadGenerator()
-        self.workloads = [
-            self.workload_generator.generate_workload(
-                WorkloadType.SMALL,
-                self.config.workload.sequence_config
-            ),
-            self.workload_generator.generate_workload(
-                WorkloadType.MEDIUM,
-                self.config.workload.sequence_config
+
+        # 4. Workload generation
+        self.workload_generator = WorkloadGenerator(seed=self.config.workload.seed)
+
+        # Some distributed_edge configs have multiple model_types (e.g. ["SMALL", "MEDIUM"])
+        # If that’s the case, we store them in self.workloads:
+        self.workloads = []
+        # Attempt to read e.g. self.config.workload.model_types
+        # If not present, fallback to a single model_type = self.config.workload.model_type
+        # Then define or pick a default SequenceConfig.
+        if hasattr(self.config.workload, 'model_types') and self.config.workload.model_types:
+            # multiple model types
+            for mtype in self.config.workload.model_types:
+                # define a default SequenceConfig (first length, first num_steps) if none
+                seq_cfg = SequenceConfig(
+                    initial_length=self.config.workload.initial_sequence_lengths[0],
+                    num_steps=self.config.workload.generation_steps[0],
+                    precision_bytes=self.config.workload.precision_bytes
+                )
+                w = self.workload_generator.generate_workload(
+                    workload_type=WorkloadType[mtype],
+                    sequence_config=seq_cfg
+                )
+                self.workloads.append(w)
+        else:
+            # single model type
+            # define default SequenceConfig if needed
+            seq_cfg = SequenceConfig(
+                initial_length=self.config.workload.initial_sequence_lengths[0],
+                num_steps=self.config.workload.generation_steps[0],
+                precision_bytes=self.config.workload.precision_bytes
             )
-        ]
-        
-        # Initialize algorithm
+            single_type = (self.config.workload.model_type
+                           if hasattr(self.config.workload, 'model_type')
+                           else WorkloadType.SMALL)
+            w = self.workload_generator.generate_workload(
+                workload_type=single_type,
+                sequence_config=seq_cfg
+            )
+            self.workloads.append(w)
+
+        # 5. Validate scenario requirements with a fallback transformer
+        test_transformer = Transformer(self.workloads[0].transformer.config)
+        if not validate_scenario_requirements(
+            self.config,
+            self.network,
+            self.devices,
+            test_transformer
+        ):
+            raise ValueError("Scenario requirements not met in distributed edge environment setup.")
+
+        # 6. Initialize a ResourceAwareDistributor for the first workload
+        #    (We can reassign .transformer for others if multiple)
         self.distributor = ResourceAwareDistributor(
-            self.workloads[0].transformer,  # Start with small model
+            self.workloads[0].transformer,
             self.network,
             self.devices
         )
+
+
+class DistributedEdgeBasicScenario(DistributedEdgeBaseScenario):
+    """
+    Basic distributed edge scenario testing operation with N=16 devices.
+    """
+
+    def setup(self) -> None:
+        """Set up the distributed edge environment"""
+        if self.logger:
+            self.logger.log_event("setup", "Setting up distributed edge basic scenario")
+        self.setup_basic_environment()
         
     def run(self) -> ScenarioResult:
         """Run the basic distributed edge scenario"""
@@ -98,34 +174,45 @@ class DistributedEdgeBasicScenario(BaseScenario):
             'performance_metrics': {},
             'model_comparison': {}
         }
-        
+
         try:
-            # Run each workload type
-            for workload_idx, workload in enumerate(self.workloads):
+            # We have self.workloads. Possibly more than one (e.g. SMALL, MEDIUM).
+            # We'll run each workload and track some stats.
+            for idx, workload in enumerate(self.workloads):
+                # reassign transformer
                 self.distributor.transformer = workload.transformer
-                workload_metrics = self._run_single_workload(workload, workload_idx)
-                
-                # Record model-specific metrics
-                metrics['model_comparison'][f'model_{workload_idx}'] = {
-                    'type': workload.workload_type.name,
-                    'average_latency': np.mean([
-                        m['latency'] for m in 
-                        workload_metrics['performance_metrics'].values()
-                    ]),
-                    'resource_utilization': np.mean([
-                        list(m.values())[0] for m in 
-                        workload_metrics['resource_metrics'].values()
-                    ])
+                # run the workload
+                w_metrics = self._run_single_workload(workload, idx)
+
+                # Example: compute average latency or resource usage
+                lat_list = [m['latency'] for m in w_metrics['performance_metrics'].values()]
+                avg_latency = float(np.mean(lat_list)) if lat_list else 0.0
+
+                # store in model_comparison
+                model_name = workload.workload_type.name
+                metrics['model_comparison'][f"model_{idx}"] = {
+                    'type': model_name,
+                    'average_latency': avg_latency,
+                    # For demonstration, we just pick a sample resource metric
+                    'resource_usage_sample': w_metrics['resource_metrics'].get(0, {})
                 }
-                
+
+            final_metrics = collect_scenario_metrics(
+                resource_metrics=metrics['resource_metrics'],
+                communication_metrics=metrics['communication_metrics'],
+                performance_metrics=metrics['performance_metrics']
+            )
+            # Add the model_comparison sub-dict if you like:
+            final_metrics['model_comparison'] = metrics['model_comparison']
+
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                metrics=collect_scenario_metrics(**metrics),
+                metrics=final_metrics,
                 success=True
             )
-            
+
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -137,29 +224,79 @@ class DistributedEdgeBasicScenario(BaseScenario):
                 success=False,
                 error=str(e)
             )
+            
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        if self.logger:
+            self.logger.log_event("cleanup", "Cleaning up distributed edge basic scenario")
 
-class DistributedEdgeCommunicationScenario(BaseScenario):
+    def _run_single_workload(self, workload, idx: int) -> Dict:
+        """
+        Runs a single workload from step=0..num_steps-1, returns step-wise metrics.
+        """
+        w_metrics = {
+            'resource_metrics': {},
+            'communication_metrics': {},
+            'performance_metrics': {}
+        }
+
+        # Ensure workload has sequence_config
+        if not workload.sequence_config:
+            raise RuntimeError(f"Workload index={idx} has no sequence_config; cannot run steps.")
+
+        for step in range(workload.sequence_config.num_steps):
+            assignment_result = self.distributor.compute_assignment(
+                generation_step=step,
+                previous_assignments=w_metrics.get('previous_assignments'),
+                previous_cache=w_metrics.get('previous_cache')
+            )
+            if not assignment_result.is_feasible:
+                raise RuntimeError(f"Infeasible assignment at step {step} for workload idx={idx}")
+
+            # record resource usage
+            w_metrics['resource_metrics'][step] = assignment_result.resource_usage
+            w_metrics['previous_assignments'] = assignment_result.component_assignments
+            w_metrics['previous_cache'] = assignment_result.cache_assignments
+            w_metrics['performance_metrics'][step] = {
+                'latency': assignment_result.estimated_latency,
+                'step': step
+            }
+
+        return w_metrics
+
+
+class DistributedEdgeCommunicationScenario(DistributedEdgeBaseScenario):
     """
-    Tests communication patterns and bandwidth utilization in distributed setup
+    Tests communication patterns and bandwidth utilization in a distributed setup
     """
-    
+
     def setup(self) -> None:
         """Set up communication test environment"""
-        # Basic setup
-        super().setup()
-        
-        # Track communication patterns
+        if self.logger:
+            self.logger.log_event("setup", "Setting up distributed edge communication scenario")
+        self.setup_basic_environment()
+
+        # Example: track communication or bandwidth usage
         self.communication_tracker = {
             'transfers': [],
             'bandwidth_usage': {},
             'network_congestion': {}
         }
-        
-        # Initialize network monitoring
+
+        # Initialize placeholders for link usage
         for (src, dst), link in self.network.links.items():
             self.communication_tracker['bandwidth_usage'][(src, dst)] = []
             self.communication_tracker['network_congestion'][(src, dst)] = []
-            
+
+        # For simplicity, pick the first workload as the main scenario workload
+        # or define multiple if you prefer
+        if self.workloads:
+            self.main_workload = self.workloads[0]
+            self.distributor.transformer = self.main_workload.transformer
+        else:
+            self.main_workload = None
+            self.distributor = None
+
     def run(self) -> ScenarioResult:
         """Run communication pattern analysis"""
         metrics = {
@@ -168,27 +305,36 @@ class DistributedEdgeCommunicationScenario(BaseScenario):
             'performance_metrics': {},
             'network_analysis': {}
         }
-        
+
+        if not self.distributor or not self.main_workload:
+            return ScenarioResult(
+                scenario_name=self.__class__.__name__,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                metrics={},
+                success=False,
+                error="No main workload or distributor defined."
+            )
+
         try:
-            for step in range(self.workload.sequence_config.num_steps):
-                # Track network state before assignment
+            for step in range(self.main_workload.sequence_config.num_steps):
+                # Before assignment, record link states
                 self._record_network_state()
-                
-                # Get assignments
+
                 assignment_result = self.distributor.compute_assignment(
-                    step,
+                    generation_step=step,
                     previous_assignments=metrics.get('previous_assignments'),
                     previous_cache=metrics.get('previous_cache')
                 )
-                
-                # Record transfers and communication patterns
+
+                # record potential "migration" or "component" movements
                 self._track_communication(
                     step,
                     assignment_result.component_assignments,
                     metrics.get('previous_assignments', {})
                 )
-                
-                # Update metrics
+
+                # update metrics
                 metrics['resource_metrics'][step] = assignment_result.resource_usage
                 metrics['previous_assignments'] = assignment_result.component_assignments
                 metrics['previous_cache'] = assignment_result.cache_assignments
@@ -196,18 +342,26 @@ class DistributedEdgeCommunicationScenario(BaseScenario):
                     'latency': assignment_result.estimated_latency,
                     'step': step
                 }
-                
-            # Analyze communication patterns
+
+            # After all steps, analyze
             metrics['network_analysis'] = self._analyze_communication_patterns()
-            
+
+            final_metrics = collect_scenario_metrics(
+                resource_metrics=metrics['resource_metrics'],
+                communication_metrics=metrics['communication_metrics'],
+                performance_metrics=metrics['performance_metrics']
+            )
+            # add "network_analysis" if you want
+            final_metrics['network_analysis'] = metrics['network_analysis']
+
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                metrics=collect_scenario_metrics(**metrics),
+                metrics=final_metrics,
                 success=True
             )
-            
+
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -219,77 +373,93 @@ class DistributedEdgeCommunicationScenario(BaseScenario):
                 success=False,
                 error=str(e)
             )
-            
+
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        if self.logger:
+            self.logger.log_event("cleanup", "Cleaning up distributed edge communication scenario")
+
     def _record_network_state(self) -> None:
-        """Record current network state"""
+        """Record current network usage / congestion before assignment"""
         for (src, dst), link in self.network.links.items():
-            self.communication_tracker['bandwidth_usage'][(src, dst)].append(
-                link.used_bandwidth / link.bandwidth
-            )
-            self.communication_tracker['network_congestion'][(src, dst)].append(
-                max(0, 1 - link.available_bandwidth / link.bandwidth)
-            )
-            
+            used_ratio = link.used_bandwidth / link.bandwidth if link.bandwidth > 0 else 0
+            congestion = max(0, 1 - link.available_bandwidth / link.bandwidth) if link.bandwidth > 0 else 1
+            self.communication_tracker['bandwidth_usage'][(src, dst)].append(used_ratio)
+            self.communication_tracker['network_congestion'][(src, dst)].append(congestion)
+
     def _track_communication(
         self,
         step: int,
         current_assignments: Dict[str, str],
         previous_assignments: Dict[str, str]
     ) -> None:
-        """Track communication events and patterns"""
-        for comp_id, device_id in current_assignments.items():
+        """Identify if any component was migrated and record it."""
+        for comp_id, dev_id in current_assignments.items():
             if comp_id in previous_assignments:
-                if device_id != previous_assignments[comp_id]:
-                    # Record component migration
+                prev_dev = previous_assignments[comp_id]
+                if dev_id != prev_dev:
+                    # record migration
                     self.communication_tracker['transfers'].append({
                         'step': step,
-                        'type': 'migration',
                         'component': comp_id,
-                        'source': previous_assignments[comp_id],
-                        'target': device_id
+                        'source': prev_dev,
+                        'target': dev_id
                     })
-                    
+
     def _analyze_communication_patterns(self) -> Dict:
-        """Analyze recorded communication patterns"""
+        """Compute summary stats from self.communication_tracker"""
+        total_migrations = len(self.communication_tracker['transfers'])
+        bandwidth_usage = {
+            link: float(np.mean(usages))
+            for link, usages in self.communication_tracker['bandwidth_usage'].items()
+        }
+        congestion_map = {
+            link: float(np.mean(vals))
+            for link, vals in self.communication_tracker['network_congestion'].items()
+        }
         return {
-            'total_transfers': len(self.communication_tracker['transfers']),
-            'bandwidth_utilization': {
-                link: np.mean(usage)
-                for link, usage in 
-                self.communication_tracker['bandwidth_usage'].items()
-            },
-            'congestion_hotspots': {
-                link: np.mean(congestion)
-                for link, congestion in 
-                self.communication_tracker['network_congestion'].items()
-            }
+            'total_transfers': total_migrations,
+            'bandwidth_utilization': bandwidth_usage,
+            'congestion_hotspots': congestion_map
         }
 
-class DistributedEdgeHeterogeneityScenario(BaseScenario):
+
+class DistributedEdgeHeterogeneityScenario(DistributedEdgeBaseScenario):
     """
     Tests system behavior with heterogeneous device capabilities
     """
-    
+
     def setup(self) -> None:
         """Set up heterogeneous environment"""
-        super().setup()
-        
-        # Create device groups with varying capabilities
+        if self.logger:
+            self.logger.log_event("setup", "Setting up distributed edge heterogeneity scenario")
+        self.setup_basic_environment()
+
+        # For demonstration, group devices by some threshold
         self.device_groups = {
             'high_capacity': [],
             'medium_capacity': [],
             'low_capacity': []
         }
-        
-        # Categorize devices based on capabilities
-        for device_id, device in self.devices.items():
-            if device.compute.capacity >= 200:  # GFLOPS
+
+        # Suppose you define a threshold for compute capacity:
+        # (you can tune these thresholds as you like)
+        for device_id, dev in self.devices.items():
+            if dev.compute.capacity >= 200:  # e.g. 200 GFLOPS
                 self.device_groups['high_capacity'].append(device_id)
-            elif device.compute.capacity >= 100:
+            elif dev.compute.capacity >= 100:
                 self.device_groups['medium_capacity'].append(device_id)
             else:
                 self.device_groups['low_capacity'].append(device_id)
-                
+
+        # If multiple workloads, pick just the first for demonstration
+        if self.workloads:
+            self.main_workload = self.workloads[0]
+            self.distributor.transformer = self.main_workload.transformer
+        else:
+            self.main_workload = None
+            self.distributor = None
+
     def run(self) -> ScenarioResult:
         """Run heterogeneity analysis"""
         metrics = {
@@ -298,34 +468,38 @@ class DistributedEdgeHeterogeneityScenario(BaseScenario):
             'performance_metrics': {},
             'heterogeneity_analysis': {}
         }
+
+        if not self.distributor or not self.main_workload:
+            return ScenarioResult(
+                scenario_name=self.__class__.__name__,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                metrics={},
+                success=False,
+                error="No main workload or distributor to run."
+            )
         
         try:
-            # Track metrics per device group
+            # track group metrics
             group_metrics = {
                 group: {
                     'utilization': [],
-                    'latency': [],
                     'assignments': []
                 }
-                for group in self.device_groups.keys()
+                for group in self.device_groups
             }
-            
-            # Run workload
-            for step in range(self.workload.sequence_config.num_steps):
+
+            for step in range(self.main_workload.sequence_config.num_steps):
                 assignment_result = self.distributor.compute_assignment(
-                    step,
+                    generation_step=step,
                     previous_assignments=metrics.get('previous_assignments'),
                     previous_cache=metrics.get('previous_cache')
                 )
-                
-                # Record group-specific metrics
-                self._record_group_metrics(
-                    step,
-                    assignment_result,
-                    group_metrics
-                )
-                
-                # Update general metrics
+
+                if not assignment_result.is_feasible:
+                    raise RuntimeError(f"Infeasible assignment at step {step} in heterogeneity test.")
+
+                # record resource usage
                 metrics['resource_metrics'][step] = assignment_result.resource_usage
                 metrics['previous_assignments'] = assignment_result.component_assignments
                 metrics['previous_cache'] = assignment_result.cache_assignments
@@ -333,20 +507,29 @@ class DistributedEdgeHeterogeneityScenario(BaseScenario):
                     'latency': assignment_result.estimated_latency,
                     'step': step
                 }
-                
-            # Analyze heterogeneity impact
-            metrics['heterogeneity_analysis'] = self._analyze_heterogeneity(
-                group_metrics
+
+                # record group-level data
+                self._record_group_metrics(assignment_result, group_metrics)
+
+            # analyze heterogeneity
+            metrics['heterogeneity_analysis'] = self._analyze_heterogeneity(group_metrics)
+
+            final_metrics = collect_scenario_metrics(
+                resource_metrics=metrics['resource_metrics'],
+                communication_metrics=metrics['communication_metrics'],
+                performance_metrics=metrics['performance_metrics']
             )
-            
+            # embed the analysis
+            final_metrics['heterogeneity_analysis'] = metrics['heterogeneity_analysis']
+
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
-                metrics=collect_scenario_metrics(**metrics),
+                metrics=final_metrics,
                 success=True
             )
-            
+
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -358,37 +541,49 @@ class DistributedEdgeHeterogeneityScenario(BaseScenario):
                 success=False,
                 error=str(e)
             )
-            
-    def _record_group_metrics(
-        self,
-        step: int,
-        assignment_result: Dict,
-        group_metrics: Dict
-    ) -> None:
-        """Record metrics for each device group"""
-        for group, devices in self.device_groups.items():
-            # Calculate group utilization
-            group_util = np.mean([
-                assignment_result.resource_usage[dev_id]['compute_utilization']
-                for dev_id in devices
-            ])
-            group_metrics[group]['utilization'].append(group_util)
-            
-            # Count assignments to group
-            assignments = sum(
-                1 for dev_id in assignment_result.component_assignments.values()
-                if dev_id in devices
+
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        if self.logger:
+            self.logger.log_event("cleanup", "Cleaning up distributed edge heterogeneity scenario")
+
+    def _record_group_metrics(self, assignment_result, group_metrics):
+        """Aggregate usage or assignment stats by group."""
+        # compute utilization by group (e.g. average compute utilization):
+        for group_name, device_ids in self.device_groups.items():
+            if not device_ids:
+                group_metrics[group_name]['utilization'].append(0.0)
+                group_metrics[group_name]['assignments'].append(0)
+                continue
+
+            # average compute_utilization for those devices
+            util_vals = []
+            for d_id in device_ids:
+                dev_usage = assignment_result.resource_usage.get(d_id, {})
+                if 'compute_utilization' in dev_usage:
+                    util_vals.append(dev_usage['compute_utilization'])
+            avg_util = float(np.mean(util_vals)) if util_vals else 0.0
+            group_metrics[group_name]['utilization'].append(avg_util)
+
+            # count how many components assigned
+            assign_count = sum(
+                1
+                for comp, dev_id in assignment_result.component_assignments.items()
+                if dev_id in device_ids
             )
-            group_metrics[group]['assignments'].append(assignments)
-            
-    def _analyze_heterogeneity(self, group_metrics: Dict) -> Dict:
-        """Analyze impact of device heterogeneity"""
-        return {
-            group: {
-                'average_utilization': np.mean(metrics['utilization']),
-                'utilization_std': np.std(metrics['utilization']),
-                'assignment_frequency': np.mean(metrics['assignments']),
-                'assignment_stability': np.std(metrics['assignments'])
+            group_metrics[group_name]['assignments'].append(assign_count)
+
+    def _analyze_heterogeneity(self, group_metrics) -> Dict:
+        """Analyze group-level stats to see if distribution is balanced."""
+        analysis = {}
+        for group_name, data in group_metrics.items():
+            util_arr = np.array(data['utilization']) if data['utilization'] else np.array([0])
+            assign_arr = np.array(data['assignments']) if data['assignments'] else np.array([0])
+
+            analysis[group_name] = {
+                'average_utilization': float(np.mean(util_arr)),
+                'utilization_std': float(np.std(util_arr)),
+                'average_assignment': float(np.mean(assign_arr)),
+                'assignment_std': float(np.std(assign_arr))
             }
-            for group, metrics in group_metrics.items()
-        }
+        return analysis

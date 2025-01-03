@@ -51,7 +51,9 @@ from .baseline_scenarios import (
     GreedyBaselineScenario,
     RoundRobinBaselineScenario,
     StaticBaselineScenario,
-    DynamicMigrationBaselineScenario
+    DynamicMigrationBaselineScenario,
+    run_all_baselines,           
+    analyze_baseline_results 
 )
 
 # Version information

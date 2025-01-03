@@ -304,38 +304,101 @@ class VisualizationManager:
         
     def create_performance_report(
         self,
-        metrics_data: pd.DataFrame,
+        metrics_data,
         output_file: Union[str, Path]
     ) -> None:
-        """Create comprehensive performance report"""
+        """
+        Create a comprehensive performance report from metrics_data.
+    
+        This version checks for columns before trying to compute stats to avoid KeyError.
+        If columns are missing, we provide safe defaults (e.g., 0.0).
+        """
+        # If your code expects a pandas DataFrame, ensure metrics_data is indeed a DataFrame here.
+        # If metrics_data is a dict, convert it or adapt accordingly.
+        import pandas as pd
+        from datetime import datetime
+        import json
+    
+        # If the user passes something not a DataFrame, you can try:
+        # if isinstance(metrics_data, dict):
+        #     metrics_data = pd.DataFrame([metrics_data])  # or handle differently
+    
+        # Safe retrieval helpers
+        def safe_max(df, col):
+            return float(df[col].max()) if col in df.columns and not df.empty else 0.0
+    
+        def safe_mean(df, col):
+            return float(df[col].mean()) if col in df.columns and not df.empty else 0.0
+    
+        def safe_sum(df, col):
+            return float(df[col].sum()) if col in df.columns and not df.empty else 0.0
+    
+        # For event filtering
+        def safe_filter(df, condition):
+            if not df.empty and "event_type" in df.columns:
+                return df[condition]
+            return pd.DataFrame()
+    
+        # Build your summary statistics
+        total_runtime = safe_max(metrics_data, "step")
+        average_latency = safe_mean(metrics_data, "latency")
+        latency_std = 0.0
+        if "latency" in metrics_data.columns and not metrics_data.empty:
+            latency_std = float(metrics_data["latency"].std())
+    
+        peak_mem_util = safe_max(metrics_data, "memory_utilization")
+        peak_comp_util = safe_max(metrics_data, "compute_utilization")
+    
+        # If you track data transfers as a separate column
+        total_data_transferred = safe_sum(metrics_data, "data_transferred")
+    
+        # Similarly for transfer_time
+        avg_transfer_time = safe_mean(metrics_data, "transfer_time")
+    
+        # Migrations
+        migration_df = safe_filter(metrics_data, (metrics_data["event_type"] == "migration"))
+        total_migrations = len(migration_df)
+        average_migration_cost = safe_mean(migration_df, "migration_cost")
+    
+        # Construct the final report dictionary
         report = {
-            'timestamp': datetime.now().isoformat(),
-            'summary_statistics': {
-                'total_runtime': metrics_data['step'].max(),
-                'average_latency': metrics_data['latency'].mean(),
-                'latency_std': metrics_data['latency'].std(),
-                'peak_memory_utilization': metrics_data['memory_utilization'].max(),
-                'peak_compute_utilization': metrics_data['compute_utilization'].max()
+            "timestamp": datetime.now().isoformat(),
+            "summary_statistics": {
+                "total_runtime": total_runtime,
+                "average_latency": average_latency,
+                "latency_std": latency_std,
+                "peak_memory_utilization": peak_mem_util,
+                "peak_compute_utilization": peak_comp_util
             },
-            'resource_utilization': {
-                'average_memory_utilization':
-                    metrics_data.groupby('device_id')['memory_utilization'].mean().to_dict(),
-                'average_compute_utilization':
-                    metrics_data.groupby('device_id')['compute_utilization'].mean().to_dict()
+            "resource_utilization": {
+                # Example: group by device_id if present
+                # If you don't have device_id, skip or adapt
+                "average_memory_utilization": {},
+                "average_compute_utilization": {}
             },
-            'communication_statistics': {
-                'total_data_transferred': metrics_data['data_transferred'].sum(),
-                'average_transfer_time': metrics_data['transfer_time'].mean()
+            "communication_statistics": {
+                "total_data_transferred": total_data_transferred,
+                "average_transfer_time": avg_transfer_time
             },
-            'migration_statistics': {
-                'total_migrations': len(metrics_data[metrics_data['event_type'] == 'migration']),
-                'average_migration_cost': metrics_data['migration_cost'].mean()
+            "migration_statistics": {
+                "total_migrations": total_migrations,
+                "average_migration_cost": average_migration_cost
             }
         }
-        
-        # Save report
-        with open(output_file, 'w') as f:
+    
+        # Optionally, fill in resource_utilization grouped by device
+        if "device_id" in metrics_data.columns:
+            mem_group = metrics_data.groupby("device_id")["memory_utilization"].mean() \
+                if "memory_utilization" in metrics_data.columns else pd.Series()
+            comp_group = metrics_data.groupby("device_id")["compute_utilization"].mean() \
+                if "compute_utilization" in metrics_data.columns else pd.Series()
+            report["resource_utilization"]["average_memory_utilization"] = mem_group.to_dict()
+            report["resource_utilization"]["average_compute_utilization"] = comp_group.to_dict()
+    
+        # Save the report as JSON
+        with open(output_file, "w") as f:
             json.dump(report, f, indent=2)
+
             
 def plot_all_metrics(
     metrics_dir: Union[str, Path],
