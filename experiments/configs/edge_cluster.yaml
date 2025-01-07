@@ -37,7 +37,7 @@ resources:
   seed: 42
 
 workload:
-  model_type: "SMALL"  # 8 attention heads, D=512
+  model_type: "LARGE"  # 8 attention heads, D=512
   initial_sequence_lengths: [128, 256]
   generation_steps: [32, 64]
   precision_bytes: 4

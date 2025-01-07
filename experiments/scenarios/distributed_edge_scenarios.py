@@ -167,44 +167,56 @@ class DistributedEdgeBasicScenario(DistributedEdgeBaseScenario):
         self.setup_basic_environment()
         
     def run(self) -> ScenarioResult:
-        """Run the basic distributed edge scenario"""
+        """
+        Run the basic distributed edge scenario across possibly multiple workloads,
+        merging their resource/performance metrics into top-level dicts.
+        """
         metrics = {
             'resource_metrics': {},
             'communication_metrics': {},
             'performance_metrics': {},
             'model_comparison': {}
         }
-
+    
         try:
-            # We have self.workloads. Possibly more than one (e.g. SMALL, MEDIUM).
-            # We'll run each workload and track some stats.
+            # If self.workloads has multiple (e.g. SMALL, MEDIUM), run each
             for idx, workload in enumerate(self.workloads):
                 # reassign transformer
                 self.distributor.transformer = workload.transformer
+    
                 # run the workload
                 w_metrics = self._run_single_workload(workload, idx)
-
-                # Example: compute average latency or resource usage
+    
+                # Merge sub-workload resource/performance metrics
+                for step, usage in w_metrics['resource_metrics'].items():
+                    metrics['resource_metrics'][(idx, step)] = usage
+                for step, usage in w_metrics['communication_metrics'].items():
+                    metrics['communication_metrics'][(idx, step)] = usage
+                for step, usage in w_metrics['performance_metrics'].items():
+                    metrics['performance_metrics'][(idx, step)] = usage
+    
+                # Compute an example average latency
                 lat_list = [m['latency'] for m in w_metrics['performance_metrics'].values()]
                 avg_latency = float(np.mean(lat_list)) if lat_list else 0.0
-
-                # store in model_comparison
+    
                 model_name = workload.workload_type.name
+                # For demonstration, store a "resource_usage_sample" from step 0
+                usage_sample = w_metrics['resource_metrics'].get(0, {})
+    
                 metrics['model_comparison'][f"model_{idx}"] = {
                     'type': model_name,
                     'average_latency': avg_latency,
-                    # For demonstration, we just pick a sample resource metric
-                    'resource_usage_sample': w_metrics['resource_metrics'].get(0, {})
+                    'resource_usage_sample': usage_sample
                 }
-
+    
             final_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
                 communication_metrics=metrics['communication_metrics'],
                 performance_metrics=metrics['performance_metrics']
             )
-            # Add the model_comparison sub-dict if you like:
+            # Add the sub-dict
             final_metrics['model_comparison'] = metrics['model_comparison']
-
+    
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
@@ -212,7 +224,7 @@ class DistributedEdgeBasicScenario(DistributedEdgeBaseScenario):
                 metrics=final_metrics,
                 success=True
             )
-
+    
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -224,6 +236,7 @@ class DistributedEdgeBasicScenario(DistributedEdgeBaseScenario):
                 success=False,
                 error=str(e)
             )
+
             
     def cleanup(self) -> None:
         """Clean up resources"""

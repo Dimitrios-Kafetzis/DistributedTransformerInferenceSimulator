@@ -115,7 +115,7 @@ class ProjectionLayer(TransformerComponent):
         
     def compute_flops(self, sequence_length: int) -> float:
         """Calculate FLOPs for projection computation"""
-        # Projection FLOPs (eq. 10 from paper)
+        # Projection FLOPs (eq. 9 from paper)
         return sequence_length * self.config.embedding_dim * self.config.embedding_dim
 
 class FeedForwardNetwork(TransformerComponent):
@@ -135,8 +135,8 @@ class FeedForwardNetwork(TransformerComponent):
         
     def compute_flops(self, sequence_length: int) -> float:
         """Calculate FLOPs for FFN computation"""
-        # FFN FLOPs (eq. 11 from paper)
-        return 8 * sequence_length * self.config.embedding_dim * self.config.embedding_dim
+        # FFN FLOPs (eq. 10 from paper)
+        return 0.8 * sequence_length * self.config.embedding_dim * self.config.embedding_dim
 
 class Transformer:
     """Main transformer class that manages all components"""

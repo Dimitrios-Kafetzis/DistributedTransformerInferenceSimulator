@@ -177,31 +177,50 @@ class HybridCloudBasicScenario(HybridCloudBaseScenario):
         self.setup_basic_environment()
 
     def run(self) -> ScenarioResult:
-        """Run the basic hybrid cloud-edge scenario"""
+        """
+        Run the basic hybrid cloud-edge scenario. We may have multiple workloads,
+        so we accumulate sub-run metrics (resource/perf) in top-level dictionaries.
+        """
+        from collections import defaultdict  # ensure it's imported
+        
         metrics = {
             'resource_metrics': {},
             'communication_metrics': {},
             'performance_metrics': {},
             'tier_metrics': defaultdict(dict)
         }
-
+    
         try:
             # We'll run each workload in self.workloads
             for idx, workload in enumerate(self.workloads):
                 self.distributor.transformer = workload.transformer
                 w_metrics = self._run_workload_with_tier_tracking(workload, idx)
-
-                metrics[f'workload_{idx}'] = w_metrics
+    
+                # Merge sub-workload data
+                for step, usage in w_metrics['resource_metrics'].items():
+                    metrics['resource_metrics'][(idx, step)] = usage
+                # If you store comm/perf data in w_metrics, unify them too:
+                #   (below are typical if you track them in _run_workload_with_tier_tracking)
+                if 'communication_metrics' in w_metrics:
+                    for step, usage in w_metrics['communication_metrics'].items():
+                        metrics['communication_metrics'][(idx, step)] = usage
+                if 'performance_metrics' in w_metrics:
+                    for step, usage in w_metrics['performance_metrics'].items():
+                        metrics['performance_metrics'][(idx, step)] = usage
+    
+                # Also incorporate tier-level info if relevant
+                # The method _update_tier_metrics(...) expects w_metrics to hold
+                # 'resource_metrics' + 'component_assignments' etc.
                 self._update_tier_metrics(w_metrics, metrics['tier_metrics'])
-
+    
             final_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
                 communication_metrics=metrics['communication_metrics'],
                 performance_metrics=metrics['performance_metrics']
             )
-            # Optionally attach the tier_metrics or the entire metrics dict
+            # Attach the tier_metrics sub-dict
             final_metrics['tier_metrics'] = metrics['tier_metrics']
-
+    
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
@@ -209,7 +228,7 @@ class HybridCloudBasicScenario(HybridCloudBaseScenario):
                 metrics=final_metrics,
                 success=True
             )
-
+    
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -221,6 +240,7 @@ class HybridCloudBasicScenario(HybridCloudBaseScenario):
                 success=False,
                 error=str(e)
             )
+
 
     def _update_tier_metrics(
         self,
@@ -330,29 +350,46 @@ class HybridCloudTierBalancingScenario(HybridCloudBaseScenario):
         }
 
     def run(self) -> ScenarioResult:
-        """Run tier balancing analysis"""
+        """
+        Run tier balancing analysis for multiple workloads, unifying sub-run
+        resource/performance metrics into top-level dictionaries.
+        """
         metrics = {
             'resource_metrics': {},
             'communication_metrics': {},
             'performance_metrics': {},
             'tier_balance_metrics': {}
         }
-
+    
         try:
             for workload in self.workloads:
                 self.distributor.transformer = workload.transformer
                 tmetrics = self._run_tier_balanced_workload(workload)
-
+    
+                # Merge sub-run data if tmetrics includes resource/performance
+                # Typically you might store them if your code modifies _run_tier_balanced_workload
+                # For example:
+                if 'resource_metrics' in tmetrics:
+                    for step, usage in tmetrics['resource_metrics'].items():
+                        metrics['resource_metrics'][(workload.workload_type.name, step)] = usage
+                if 'communication_metrics' in tmetrics:
+                    for step, usage in tmetrics['communication_metrics'].items():
+                        metrics['communication_metrics'][(workload.workload_type.name, step)] = usage
+                if 'performance_metrics' in tmetrics:
+                    for step, usage in tmetrics['performance_metrics'].items():
+                        metrics['performance_metrics'][(workload.workload_type.name, step)] = usage
+    
+                # Compute some final stats for tier balance
                 metrics['tier_balance_metrics'][workload.workload_type.name] = \
                     self._analyze_tier_balance(tmetrics)
-
+    
             final_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
                 communication_metrics=metrics['communication_metrics'],
                 performance_metrics=metrics['performance_metrics']
             )
             final_metrics['tier_balance_metrics'] = metrics['tier_balance_metrics']
-
+    
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
@@ -360,7 +397,7 @@ class HybridCloudTierBalancingScenario(HybridCloudBaseScenario):
                 metrics=final_metrics,
                 success=True
             )
-
+    
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -372,6 +409,7 @@ class HybridCloudTierBalancingScenario(HybridCloudBaseScenario):
                 success=False,
                 error=str(e)
             )
+
 
     def cleanup(self) -> None:
         """Clean up resources"""
@@ -474,29 +512,45 @@ class HybridCloudLatencyScenario(HybridCloudBaseScenario):
         }
 
     def run(self) -> ScenarioResult:
-        """Run latency analysis"""
+        """
+        Run latency analysis across multiple workloads, merging sub-run
+        resource/performance data for final scenario-level metrics.
+        """
         metrics = {
             'resource_metrics': {},
             'communication_metrics': {},
             'performance_metrics': {},
             'latency_analysis': {}
         }
-
+    
         try:
             # Example: run each workload
             for workload in self.workloads:
                 self.distributor.transformer = workload.transformer
                 lat_metrics = self._run_latency_analysis(workload)
+    
+                # If lat_metrics includes sub-run resource or communication data, unify them
+                if 'resource_metrics' in lat_metrics:
+                    for step, usage in lat_metrics['resource_metrics'].items():
+                        metrics['resource_metrics'][(workload.workload_type.name, step)] = usage
+                if 'communication_metrics' in lat_metrics:
+                    for step, usage in lat_metrics['communication_metrics'].items():
+                        metrics['communication_metrics'][(workload.workload_type.name, step)] = usage
+                if 'performance_metrics' in lat_metrics:
+                    for step, usage in lat_metrics['performance_metrics'].items():
+                        metrics['performance_metrics'][(workload.workload_type.name, step)] = usage
+    
+                # Then store the final aggregated latency analysis
                 metrics['latency_analysis'][workload.workload_type.name] = \
                     self._analyze_latency_patterns(lat_metrics)
-
+    
             final_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
                 communication_metrics=metrics['communication_metrics'],
                 performance_metrics=metrics['performance_metrics']
             )
             final_metrics['latency_analysis'] = metrics['latency_analysis']
-
+    
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
@@ -504,7 +558,7 @@ class HybridCloudLatencyScenario(HybridCloudBaseScenario):
                 metrics=final_metrics,
                 success=True
             )
-
+    
         except Exception as e:
             if self.logger:
                 self.logger.log_error("scenario_error", str(e))
@@ -516,6 +570,7 @@ class HybridCloudLatencyScenario(HybridCloudBaseScenario):
                 success=False,
                 error=str(e)
             )
+
 
     def cleanup(self) -> None:
         """Clean up resources"""

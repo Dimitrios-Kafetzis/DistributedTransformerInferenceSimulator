@@ -281,10 +281,14 @@ class EdgeClusterScalabilityScenario(EdgeClusterBaseScenario):
             self.distributor = None
 
     def run(self) -> ScenarioResult:
-        """Run scalability tests"""
+        """
+        Run scalability tests by iterating over multiple workloads
+        of increasing sequence length, accumulating scenario-level metrics.
+        """
         if not self.distributor:
             raise RuntimeError("No distributor is defined. Possibly no workloads generated.")
-
+    
+        # Prepare top-level dicts; we will merge sub-workload data here
         metrics = {
             'resource_metrics': {},
             'communication_metrics': {},
@@ -297,42 +301,50 @@ class EdgeClusterScalabilityScenario(EdgeClusterBaseScenario):
             for idx, workload in enumerate(self.workloads):
                 # Reassign the transform for the distributor
                 self.distributor.transformer = workload.transformer
-
+    
                 # Actually run the workload
                 workload_metrics = self._run_single_workload(workload, idx)
-
-                # Suppose we store some aggregated info
+    
+                # Merge sub-workload resource/performance metrics into top-level
+                for step, usage in workload_metrics['resource_metrics'].items():
+                    # Store at key = (workload_idx, step) so we don't overwrite
+                    metrics['resource_metrics'][(idx, step)] = usage
+                for step, usage in workload_metrics['communication_metrics'].items():
+                    metrics['communication_metrics'][(idx, step)] = usage
+                for step, usage in workload_metrics['performance_metrics'].items():
+                    metrics['performance_metrics'][(idx, step)] = usage
+    
+                # e.g. aggregated average latency, peak memory usage
                 latencies = [m['latency'] for m in workload_metrics['performance_metrics'].values()]
                 average_latency = float(np.mean(latencies)) if latencies else 0.0
-
+    
+                # A quick example for a peak memory usage
                 resource_usages = workload_metrics['resource_metrics'].values()
-                # example: peak memory usage across steps
-                # let's define "peak_mem" as the sum of device usage at the step's maximum
-                # or something. We'll do a simple approach:
                 peak_mem = 0.0
                 for usage_dict in resource_usages:
-                    # usage_dict is e.g. { 'device_0': {'memory_used':..., 'compute_used':...}... }
                     step_total = 0.0
                     for dev_id, usage in usage_dict.items():
                         step_total += usage.get('memory_used', 0)
                     if step_total > peak_mem:
                         peak_mem = step_total
-
+    
+                # Store in 'scalability_metrics'
                 metrics['scalability_metrics'][idx] = {
                     'sequence_length': workload.sequence_config.initial_length,
                     'average_latency': average_latency,
                     'peak_memory': peak_mem
                 }
-
-            # Convert partial metrics to scenario result
+    
+            # Now convert partial metrics to scenario result
             scenario_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
                 communication_metrics=metrics['communication_metrics'],
                 performance_metrics=metrics['performance_metrics']
             )
-            # Merge in the 'scalability_metrics' if you want:
+    
+            # Optionally merge the 'scalability_metrics'
             scenario_metrics['scalability'] = metrics['scalability_metrics']
-
+    
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
@@ -352,6 +364,7 @@ class EdgeClusterScalabilityScenario(EdgeClusterBaseScenario):
                 success=False,
                 error=str(e)
             )
+
             
     def cleanup(self) -> None:
         """Clean up resources"""

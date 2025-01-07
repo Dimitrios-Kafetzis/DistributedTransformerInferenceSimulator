@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 from ..core import Device, Network, Transformer, TransformerComponent
+import math
 
 @dataclass
 class ResourceRequirements:
@@ -164,6 +165,10 @@ def validate_assignment(
     - Communication constraints
     - Privacy constraints
     """
+    # If assignments is None or not a dict, just fail:
+    if not isinstance(assignments, dict):
+        return False
+
     # Check if all components are assigned
     if len(assignments) != len(transformer.get_all_components()):
         return False
@@ -275,3 +280,119 @@ def estimate_migration_cost(
         target_device,
         total_data
     )
+
+def compute_3phase_latency(
+    transformer: Transformer,
+    devices: Dict[str, Device],
+    network: Network,
+    assignments: Dict[str, str],
+    generation_step: int,
+    concurrency_mode: str = "sum"
+) -> float:
+    """
+    Compute advanced latency in 3 phases:
+      1) Heads (parallel across devices)
+      2) Projection
+      3) FFN
+    Returns total latency (time in seconds, presumably).
+    
+    concurrency_mode: "sum" or "max" for how we combine comm from multiple devices.
+    """
+
+    # 1) Identify which heads are on which device
+    device_head_flops = {d_id: 0.0 for d_id in devices}
+    for head in transformer.attention_heads:
+        head_id = head.component_id
+        if head_id not in assignments:
+            continue
+        dev_id = assignments[head_id]
+        # sum flops
+        flops = head.compute_flops(transformer.current_sequence_length)
+        device_head_flops[dev_id] += flops
+
+    # 2) For each device, compute how long the heads run
+    # heads_time is the max over devices
+    heads_time = 0.0
+    for dev_id, flops_sum in device_head_flops.items():
+        cap = devices[dev_id].compute.capacity
+        if cap > 0:
+            t_dev = flops_sum / cap
+        else:
+            t_dev = float('inf')
+        if t_dev > heads_time:
+            heads_time = t_dev
+
+    # 3) Find the device that hosts "projection"
+    proj_id = "projection"
+    if proj_id not in assignments:
+        return float('inf')  # invalid
+    proj_dev_id = assignments[proj_id]
+    # compute flops for projection
+    proj_obj = transformer.get_component(proj_id)
+    proj_flops = proj_obj.compute_flops(transformer.current_sequence_length)
+    proj_time = proj_flops / devices[proj_dev_id].compute.capacity if devices[proj_dev_id].compute.capacity > 0 else float('inf')
+
+    # Communication from heads devices to projection
+    # if concurrency_mode="sum", sum data
+    # if concurrency_mode="max", max data/time
+    data_heads_proj = 0.0
+    times_heads_proj = []
+    for dev_id, flops_sum in device_head_flops.items():
+        if flops_sum == 0.0 or dev_id == proj_dev_id:
+            continue
+        # estimate data from head -> projection
+        # e.g. "head_out_size" = (sequence_length * head_dim * precision_bytes) => from each head
+        # but if multiple heads are on that device, total data is #heads_on_dev * head_out_size
+        # For simplicity, let's assume each head output is the same size => you can do better.
+        # We'll reuse the logic in the resource_aware code:
+        # or define a single function to estimate HEAD->PROJ data
+        # For demonstration, let's define a naive approach:
+        num_heads = 0
+        for h in transformer.attention_heads:
+            if assignments.get(h.component_id, None) == dev_id:
+                num_heads += 1
+        # Suppose each head out size in GB:
+        head_out_gb = (transformer.current_sequence_length *
+                       transformer.config.head_dim *
+                       transformer.config.precision_bytes) / (1024 ** 3)
+        total_gb = num_heads * head_out_gb
+
+        # network calculates time:
+        t_time = network.calculate_transfer_time(dev_id, proj_dev_id, total_gb)
+        times_heads_proj.append(t_time)
+        data_heads_proj += total_gb
+
+    if concurrency_mode == "sum":
+        comm_heads_to_proj = sum(times_heads_proj)
+    else:
+        comm_heads_to_proj = max(times_heads_proj) if times_heads_proj else 0.0
+
+    # 4) projection total time => comm + compute
+    projection_stage_time = comm_heads_to_proj + proj_time
+
+    # 5) find device for "ffn"
+    ffn_id = "ffn"
+    if ffn_id not in assignments:
+        return float('inf')
+    ffn_dev_id = assignments[ffn_id]
+    ffn_obj = transformer.get_component(ffn_id)
+    ffn_flops = ffn_obj.compute_flops(transformer.current_sequence_length)
+    ffn_time = ffn_flops / devices[ffn_dev_id].compute.capacity if devices[ffn_dev_id].compute.capacity > 0 else float('inf')
+
+    # comm from proj_dev to ffn_dev
+    # example: same logic
+    # if different device => data size = ( seq_len * embedding_dim * precision_bytes ) / 1024^3
+    # use e.g. "projection -> ffn" data calc
+    if proj_dev_id != ffn_dev_id:
+        proj_ffn_data_gb = (transformer.current_sequence_length *
+                            transformer.config.embedding_dim *
+                            transformer.config.precision_bytes) / (1024 ** 3)
+        comm_proj_to_ffn = network.calculate_transfer_time(proj_dev_id, ffn_dev_id, proj_ffn_data_gb)
+    else:
+        comm_proj_to_ffn = 0.0
+
+    ffn_stage_time = comm_proj_to_ffn + ffn_time
+
+    # total pipeline time
+    total_latency = heads_time + projection_stage_time + ffn_stage_time
+    return total_latency

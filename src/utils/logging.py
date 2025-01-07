@@ -274,7 +274,7 @@ class SimulationLogger:
 def setup_logging(
     experiment_name: str,
     log_dir: Union[str, Path],
-    console_level: LogLevel = LogLevel.INFO,
+    console_level: LogLevel = LogLevel.DEBUG,
     file_level: LogLevel = LogLevel.DEBUG
 ) -> SimulationLogger:
     """Set up logging for an experiment"""

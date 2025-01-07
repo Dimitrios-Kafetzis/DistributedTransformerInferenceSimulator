@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File:   experiments/configs/toy_example.yaml
+# Description:
+#   A small-scale "toy" scenario with just a few devices and minimal steps,
+#   for testing or demonstration.
+
+network:
+  topology_type: "toy"
+  num_devices: 3
+  min_bandwidth: 0.01
+  max_bandwidth: 0.1
+  edge_probability: 0.5
+  seed: 123
+
+resources:
+  memory_mu: 1.0
+  memory_sigma: 0.5
+  memory_min: 2.0
+  memory_max: 8.0
+  compute_mu: 4.0
+  compute_sigma: 0.3
+  compute_min: 1.0e9
+  compute_max: 10.0e9
+  seed: 123
+
+workload:
+  model_type: "SMALL"
+  initial_sequence_lengths: [32]
+  generation_steps: [5]
+  precision_bytes: 2
+  seed: 123
+
+algorithm:
+  migration_threshold: 0.8
+  backtrack_limit: 10
+  cache_placement_strategy: "random"
+  enable_dynamic_adjustment: false
+
+experiment:
+  name: "toy_example_evaluation"
+  description: "Toy example scenario with minimal devices and short steps"
+  num_runs: 1
+  checkpoint_interval: 1
+  time_limit: 300
+  metrics_output_dir: "results/toy_example"
+  save_intermediate: false

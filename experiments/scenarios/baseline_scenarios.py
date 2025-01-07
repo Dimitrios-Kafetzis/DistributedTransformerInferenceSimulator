@@ -70,11 +70,10 @@ class BaselineComparisonBaseScenario(BaseScenario):
     """
 
     def setup(self) -> None:
-        """Set up the environment based on config, creating network/devices/workload."""
         if self.logger:
             self.logger.log_event("setup", "Setting up baseline comparison environment")
 
-        # 1. Create the network topology based on config.network.topology_type
+        # 1. Create the network topology
         topo_type = self.config.network.topology_type
         if topo_type == "edge_cluster":
             topology_generator = EdgeClusterTopology(self.config.network)
@@ -87,7 +86,7 @@ class BaselineComparisonBaseScenario(BaseScenario):
 
         self.network = topology_generator.generate()
 
-        # 2. Create resource distributions from config
+        # 2. Create resource distributions
         mem_dist = LogNormalDistribution(
             mu=self.config.resources.memory_mu,
             sigma=self.config.resources.memory_sigma,
@@ -109,7 +108,7 @@ class BaselineComparisonBaseScenario(BaseScenario):
         )
         self.device_capabilities = resource_distributor.generate_capabilities()
 
-        # 3. Create Device objects
+        # 3. Create devices
         self.devices = {}
         for device_id, caps in self.device_capabilities.items():
             self.devices[device_id] = Device(
@@ -119,51 +118,34 @@ class BaselineComparisonBaseScenario(BaseScenario):
                 is_source=caps.is_source
             )
 
-        # 4. Create workloads
+        # 4. Create single workload
         self.workload_generator = WorkloadGenerator(seed=self.config.workload.seed)
-        # For simplicity, assume a single model_type scenario for baseline
-        # If you have multiple model_types, you can adapt similarly.
         if getattr(self.config.workload, 'model_types', None):
-            # Just pick the first or handle multiple if desired
             chosen_type = self.config.workload.model_types[0]
             self.workload = self.workload_generator.generate_workload(
                 workload_type=WorkloadType[chosen_type],
                 sequence_config=None
             )
         else:
-            # single model_type
             single_mtype = getattr(self.config.workload, 'model_type', WorkloadType.SMALL)
             self.workload = self.workload_generator.generate_workload(
                 workload_type=single_mtype,
                 sequence_config=None
             )
 
-        # 5. Validate scenario if desired
+        # 5. Validate scenario
         test_transformer = Transformer(self.workload.transformer.config)
         if not validate_scenario_requirements(
             self.config, self.network, self.devices, test_transformer
         ):
-            raise ValueError(
-                "Scenario requirements not met in baseline environment setup"
-            )
+            raise ValueError("Scenario requirements not met in baseline environment setup")
 
     def run(self) -> ScenarioResult:
-        """
-        Child classes must override 'run()'.
-        This is left as a placeholder so we can be non-abstract.
-        """
         raise NotImplementedError("Subclasses must implement run()")
 
     def cleanup(self) -> None:
-        """
-        Non-abstract cleanup so that child classes do not remain abstract.
-        Subclasses can override or extend this if needed.
-        """
         if self.logger:
-            self.logger.log_event(
-                "cleanup",
-                "Cleaning up baseline comparison scenario"
-            )
+            self.logger.log_event("cleanup", "Cleaning up baseline comparison scenario")
 
 
 class BaselineComparisonScenario(BaselineComparisonBaseScenario):
@@ -173,7 +155,6 @@ class BaselineComparisonScenario(BaselineComparisonBaseScenario):
     """
 
     def _initialize_metrics(self) -> Dict:
-        """Initialize metrics tracking structure"""
         return {
             'resource_metrics': defaultdict(dict),
             'communication_metrics': defaultdict(dict),
@@ -186,14 +167,7 @@ class BaselineComparisonScenario(BaselineComparisonBaseScenario):
             }
         }
 
-    def _record_comparison_metrics(
-        self,
-        algorithm_name: str,
-        step: int,
-        assignment_result,
-        metrics: Dict
-    ) -> None:
-        """Record metrics for algorithm comparison"""
+    def _record_comparison_metrics(self, algorithm_name: str, step: int, assignment_result, metrics: Dict) -> None:
         metrics['latency'][algorithm_name].append(
             assignment_result.estimated_latency
         )
@@ -212,70 +186,74 @@ class BaselineComparisonScenario(BaselineComparisonBaseScenario):
             metrics['migration_counts'][algorithm_name] += len(assignment_result.migrations)
 
     def run(self) -> ScenarioResult:
-        # Remains abstract unless you want a default no-op
         raise NotImplementedError("Child classes must implement run().")
 
     def cleanup(self) -> None:
-        """Clean up resources if needed"""
         if self.logger:
             self.logger.log_event("cleanup", f"Cleaning up {self.__class__.__name__}")
-        # If there's anything special to do, do it here.
         super().cleanup()
 
 
 class GreedyBaselineScenario(BaselineComparisonScenario):
     """
-    Tests greedy placement strategy that assigns components
-    to first available device with sufficient resources.
+    Tests a greedy placement strategy that assigns components to the first available
+    device with sufficient resources, and compares it against resource-aware distribution.
     """
-
     def setup(self) -> None:
-        super().setup()  # sets up environment
+        super().setup()
         if self.logger:
-            self.logger.log_event("setup", "Setting up Greedy baseline")
+            self.logger.log_event("setup", "Setting up Greedy baseline (multi-workload)")
+
+        if not hasattr(self, 'workloads') or not self.workloads:
+            self.workloads = [self.workload]  # fallback single
+
+        if self.workloads:
+            first_transformer = self.workloads[0].transformer
+        else:
+            first_transformer = self.workload.transformer
 
         self.greedy_distributor = GreedyDistributor(
-            self.workload.transformer,
-            self.network,
-            self.devices
+            first_transformer, self.network, self.devices
         )
         self.resource_aware_distributor = ResourceAwareDistributor(
-            self.workload.transformer,
-            self.network,
-            self.devices
+            first_transformer, self.network, self.devices
         )
 
     def run(self) -> ScenarioResult:
-        """Run greedy baseline comparison"""
         metrics = self._initialize_metrics()
         try:
-            seq_config = self.workload.sequence_config
-            if seq_config is None:
-                raise ValueError("No sequence_config defined in workload for GreedyBaselineScenario.")
+            if not self.workloads:
+                raise ValueError("No workloads found for GreedyBaselineScenario.")
 
-            for step in range(seq_config.num_steps):
-                # Greedy
-                greedy_result = self.greedy_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=metrics.get('greedy_previous'),
-                    previous_cache=metrics.get('greedy_cache')
-                )
-                # Resource-Aware
-                resource_aware_result = self.resource_aware_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=metrics.get('resource_aware_previous'),
-                    previous_cache=metrics.get('resource_aware_cache')
-                )
+            for w_idx, workload in enumerate(self.workloads):
+                seq_config = workload.sequence_config
+                if seq_config is None:
+                    raise ValueError(f"No sequence_config for workload index={w_idx} in GreedyBaselineScenario.")
 
-                # Record
-                self._record_comparison_metrics('greedy', step, greedy_result, metrics['comparison_metrics'])
-                self._record_comparison_metrics('resource_aware', step, resource_aware_result, metrics['comparison_metrics'])
+                self.greedy_distributor.transformer = workload.transformer
+                self.resource_aware_distributor.transformer = workload.transformer
 
-                # Update
-                metrics['greedy_previous'] = greedy_result.component_assignments
-                metrics['greedy_cache'] = greedy_result.cache_assignments
-                metrics['resource_aware_previous'] = resource_aware_result.component_assignments
-                metrics['resource_aware_cache'] = resource_aware_result.cache_assignments
+                for step in range(seq_config.num_steps):
+                    # Greedy
+                    greedy_result = self.greedy_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=metrics.get('greedy_previous'),
+                        previous_cache=metrics.get('greedy_cache')
+                    )
+                    # Resource-Aware
+                    resource_aware_result = self.resource_aware_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=metrics.get('resource_aware_previous'),
+                        previous_cache=metrics.get('resource_aware_cache')
+                    )
+
+                    self._record_comparison_metrics('greedy', step, greedy_result, metrics['comparison_metrics'])
+                    self._record_comparison_metrics('resource_aware', step, resource_aware_result, metrics['comparison_metrics'])
+
+                    metrics['greedy_previous'] = greedy_result.component_assignments
+                    metrics['greedy_cache'] = greedy_result.cache_assignments
+                    metrics['resource_aware_previous'] = resource_aware_result.component_assignments
+                    metrics['resource_aware_cache'] = resource_aware_result.cache_assignments
 
             scenario_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
@@ -305,7 +283,6 @@ class GreedyBaselineScenario(BaselineComparisonScenario):
             )
 
     def cleanup(self) -> None:
-        """Explicitly implement cleanup to satisfy the abstract base."""
         if self.logger:
             self.logger.log_event("cleanup", f"Cleaning up {self.__class__.__name__}")
         super().cleanup()
@@ -313,52 +290,62 @@ class GreedyBaselineScenario(BaselineComparisonScenario):
 
 class RoundRobinBaselineScenario(BaselineComparisonScenario):
     """
-    Tests round-robin distribution strategy that distributes components
-    evenly across available devices
+    Tests a round-robin distribution strategy that distributes components
+    evenly across available devices, and compares it with resource-aware distribution.
     """
-
     def setup(self) -> None:
         super().setup()
         if self.logger:
-            self.logger.log_event("setup", "Setting up Round-Robin baseline")
+            self.logger.log_event("setup", "Setting up Round-Robin baseline (multi-workload)")
+
+        if not hasattr(self, 'workloads') or not self.workloads:
+            self.workloads = [self.workload]
+
+        if self.workloads:
+            first_transformer = self.workloads[0].transformer
+        else:
+            first_transformer = self.workload.transformer
 
         self.round_robin_distributor = RoundRobinDistributor(
-            self.workload.transformer,
-            self.network,
-            self.devices
+            first_transformer, self.network, self.devices
         )
         self.resource_aware_distributor = ResourceAwareDistributor(
-            self.workload.transformer,
-            self.network,
-            self.devices
+            first_transformer, self.network, self.devices
         )
 
     def run(self) -> ScenarioResult:
         metrics = self._initialize_metrics()
         try:
-            seq_config = self.workload.sequence_config
-            if seq_config is None:
-                raise ValueError("No sequence_config in workload for RoundRobinBaselineScenario.")
+            if not self.workloads:
+                raise ValueError("No workloads found for RoundRobinBaselineScenario.")
 
-            for step in range(seq_config.num_steps):
-                rr_result = self.round_robin_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=metrics.get('round_robin_previous'),
-                    previous_cache=metrics.get('round_robin_cache')
-                )
-                ra_result = self.resource_aware_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=metrics.get('resource_aware_previous'),
-                    previous_cache=metrics.get('resource_aware_cache')
-                )
+            for w_idx, workload in enumerate(self.workloads):
+                seq_config = workload.sequence_config
+                if seq_config is None:
+                    raise ValueError(f"No sequence_config for workload index={w_idx} in RoundRobinBaselineScenario.")
 
-                self._record_comparison_metrics('round_robin', step, rr_result, metrics['comparison_metrics'])
-                self._record_comparison_metrics('resource_aware', step, ra_result, metrics['comparison_metrics'])
+                self.round_robin_distributor.transformer = workload.transformer
+                self.resource_aware_distributor.transformer = workload.transformer
 
-                metrics['round_robin_previous'] = rr_result.component_assignments
-                metrics['round_robin_cache'] = rr_result.cache_assignments
-                metrics['resource_aware_previous'] = ra_result.component_assignments
-                metrics['resource_aware_cache'] = ra_result.cache_assignments
+                for step in range(seq_config.num_steps):
+                    rr_result = self.round_robin_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=metrics.get('round_robin_previous'),
+                        previous_cache=metrics.get('round_robin_cache')
+                    )
+                    ra_result = self.resource_aware_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=metrics.get('resource_aware_previous'),
+                        previous_cache=metrics.get('resource_aware_cache')
+                    )
+
+                    self._record_comparison_metrics('round_robin', step, rr_result, metrics['comparison_metrics'])
+                    self._record_comparison_metrics('resource_aware', step, ra_result, metrics['comparison_metrics'])
+
+                    metrics['round_robin_previous'] = rr_result.component_assignments
+                    metrics['round_robin_cache'] = rr_result.cache_assignments
+                    metrics['resource_aware_previous'] = ra_result.component_assignments
+                    metrics['resource_aware_cache'] = ra_result.cache_assignments
 
             scenario_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
@@ -388,7 +375,6 @@ class RoundRobinBaselineScenario(BaselineComparisonScenario):
             )
 
     def cleanup(self) -> None:
-        """Explicitly implement cleanup."""
         if self.logger:
             self.logger.log_event("cleanup", f"Cleaning up {self.__class__.__name__}")
         super().cleanup()
@@ -396,55 +382,64 @@ class RoundRobinBaselineScenario(BaselineComparisonScenario):
 
 class StaticBaselineScenario(BaselineComparisonScenario):
     """
-    Tests static partitioning strategy that maintains fixed
-    assignments based on initial conditions
+    Tests a static partitioning strategy based on initial conditions,
+    compared to resource-aware distribution across multiple workloads.
     """
-
     def setup(self) -> None:
         super().setup()
         if self.logger:
-            self.logger.log_event("setup", "Setting up Static baseline")
+            self.logger.log_event("setup", "Setting up Static baseline (multi-workload)")
+
+        if not hasattr(self, 'workloads') or not self.workloads:
+            self.workloads = [self.workload]
+
+        if self.workloads:
+            first_transformer = self.workloads[0].transformer
+        else:
+            first_transformer = self.workload.transformer
 
         self.static_distributor = StaticDistributor(
-            self.workload.transformer,
-            self.network,
-            self.devices
+            first_transformer, self.network, self.devices
         )
         self.resource_aware_distributor = ResourceAwareDistributor(
-            self.workload.transformer,
-            self.network,
-            self.devices
+            first_transformer, self.network, self.devices
         )
 
     def run(self) -> ScenarioResult:
         metrics = self._initialize_metrics()
         try:
-            # Create initial static assignment
-            initial_result = self.static_distributor.compute_assignment(generation_step=0)
-            if not initial_result.is_feasible:
-                raise RuntimeError("Initial static assignment infeasible for static baseline")
+            if not self.workloads:
+                raise ValueError("No workloads found for StaticBaselineScenario.")
 
-            seq_config = self.workload.sequence_config
-            if seq_config is None:
-                raise ValueError("No sequence_config in workload for StaticBaselineScenario.")
+            for w_idx, workload in enumerate(self.workloads):
+                seq_config = workload.sequence_config
+                if seq_config is None:
+                    raise ValueError(f"No sequence_config for workload index={w_idx} in StaticBaselineScenario.")
 
-            for step in range(seq_config.num_steps):
-                static_result = self.static_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=initial_result.component_assignments,
-                    previous_cache=initial_result.cache_assignments
+                # Step 0: create initial static assignment
+                initial_result = self.static_distributor.compute_assignment(
+                    generation_step=0
                 )
-                ra_result = self.resource_aware_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=metrics.get('resource_aware_previous'),
-                    previous_cache=metrics.get('resource_aware_cache')
-                )
+                if not initial_result.is_feasible:
+                    raise RuntimeError("Initial static assignment infeasible.")
 
-                self._record_comparison_metrics('static', step, static_result, metrics['comparison_metrics'])
-                self._record_comparison_metrics('resource_aware', step, ra_result, metrics['comparison_metrics'])
+                for step in range(seq_config.num_steps):
+                    static_result = self.static_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=initial_result.component_assignments,
+                        previous_cache=initial_result.cache_assignments
+                    )
+                    ra_result = self.resource_aware_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=metrics.get('resource_aware_previous'),
+                        previous_cache=metrics.get('resource_aware_cache')
+                    )
 
-                metrics['resource_aware_previous'] = ra_result.component_assignments
-                metrics['resource_aware_cache'] = ra_result.cache_assignments
+                    self._record_comparison_metrics('static', step, static_result, metrics['comparison_metrics'])
+                    self._record_comparison_metrics('resource_aware', step, ra_result, metrics['comparison_metrics'])
+
+                    metrics['resource_aware_previous'] = ra_result.component_assignments
+                    metrics['resource_aware_cache'] = ra_result.cache_assignments
 
             scenario_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
@@ -474,7 +469,6 @@ class StaticBaselineScenario(BaselineComparisonScenario):
             )
 
     def cleanup(self) -> None:
-        """Explicitly implement cleanup."""
         if self.logger:
             self.logger.log_event("cleanup", f"Cleaning up {self.__class__.__name__}")
         super().cleanup()
@@ -482,26 +476,31 @@ class StaticBaselineScenario(BaselineComparisonScenario):
 
 class DynamicMigrationBaselineScenario(BaselineComparisonScenario):
     """
-    Tests dynamic migration strategy that reassigns components
-    when resource utilization exceeds thresholds
+    Tests dynamic migration that reassigns components on resource thresholds,
+    compares it with resource-aware distribution over multiple workloads.
     """
-
     def setup(self) -> None:
         super().setup()
         if self.logger:
-            self.logger.log_event("setup", "Setting up Dynamic Migration baseline")
+            self.logger.log_event("setup", "Setting up Dynamic Migration baseline (multi-workload)")
+
+        if not hasattr(self, 'workloads') or not self.workloads:
+            self.workloads = [self.workload]
+
+        if self.workloads:
+            first_transformer = self.workloads[0].transformer
+        else:
+            first_transformer = self.workload.transformer
 
         self.dynamic_distributor = DynamicMigrationDistributor(
-            self.workload.transformer,
+            first_transformer,
             self.network,
             self.devices,
             memory_threshold=self.config.algorithm.migration_threshold,
             compute_threshold=self.config.algorithm.migration_threshold
         )
         self.resource_aware_distributor = ResourceAwareDistributor(
-            self.workload.transformer,
-            self.network,
-            self.devices
+            first_transformer, self.network, self.devices
         )
         self.migration_history = {
             'dynamic': [],
@@ -511,33 +510,39 @@ class DynamicMigrationBaselineScenario(BaselineComparisonScenario):
     def run(self) -> ScenarioResult:
         metrics = self._initialize_metrics()
         try:
-            seq_config = self.workload.sequence_config
-            if seq_config is None:
-                raise ValueError("No sequence_config in workload for DynamicMigrationBaselineScenario.")
+            if not self.workloads:
+                raise ValueError("No workloads found for DynamicMigrationBaselineScenario.")
 
-            for step in range(seq_config.num_steps):
-                dynamic_result = self.dynamic_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=metrics.get('dynamic_previous'),
-                    previous_cache=metrics.get('dynamic_cache')
-                )
-                ra_result = self.resource_aware_distributor.compute_assignment(
-                    generation_step=step,
-                    previous_assignments=metrics.get('resource_aware_previous'),
-                    previous_cache=metrics.get('resource_aware_cache')
-                )
+            for w_idx, workload in enumerate(self.workloads):
+                seq_config = workload.sequence_config
+                if seq_config is None:
+                    raise ValueError(f"No sequence_config for workload index={w_idx} in DynamicMigrationBaselineScenario.")
 
-                self._record_comparison_metrics('dynamic', step, dynamic_result, metrics['comparison_metrics'])
-                self._record_comparison_metrics('resource_aware', step, ra_result, metrics['comparison_metrics'])
+                for step in range(seq_config.num_steps):
+                    dynamic_result = self.dynamic_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=metrics.get('dynamic_previous'),
+                        previous_cache=metrics.get('dynamic_cache')
+                    )
+                    ra_result = self.resource_aware_distributor.compute_assignment(
+                        generation_step=step,
+                        previous_assignments=metrics.get('resource_aware_previous'),
+                        previous_cache=metrics.get('resource_aware_cache')
+                    )
 
-                self._track_migrations(step, dynamic_result, ra_result,
-                                       metrics.get('dynamic_previous'),
-                                       metrics.get('resource_aware_previous'))
+                    self._record_comparison_metrics('dynamic', step, dynamic_result, metrics['comparison_metrics'])
+                    self._record_comparison_metrics('resource_aware', step, ra_result, metrics['comparison_metrics'])
 
-                metrics['dynamic_previous'] = dynamic_result.component_assignments
-                metrics['dynamic_cache'] = dynamic_result.cache_assignments
-                metrics['resource_aware_previous'] = ra_result.component_assignments
-                metrics['resource_aware_cache'] = ra_result.cache_assignments
+                    self._track_migrations(
+                        step, dynamic_result, ra_result,
+                        metrics.get('dynamic_previous'),
+                        metrics.get('resource_aware_previous')
+                    )
+
+                    metrics['dynamic_previous'] = dynamic_result.component_assignments
+                    metrics['dynamic_cache'] = dynamic_result.cache_assignments
+                    metrics['resource_aware_previous'] = ra_result.component_assignments
+                    metrics['resource_aware_cache'] = ra_result.cache_assignments
 
             scenario_metrics = collect_scenario_metrics(
                 resource_metrics=metrics['resource_metrics'],
@@ -566,19 +571,14 @@ class DynamicMigrationBaselineScenario(BaselineComparisonScenario):
                 error=str(e)
             )
 
-    def _track_migrations(
-        self,
-        step: int,
-        dynamic_result,
-        resource_aware_result,
-        prev_dynamic: Optional[Dict],
-        prev_resource_aware: Optional[Dict]
-    ) -> None:
-        """Track component migrations for both algorithms."""
+    def _track_migrations(self, step: int, dynamic_result, resource_aware_result,
+                          prev_dynamic: Optional[Dict], prev_resource_aware: Optional[Dict]) -> None:
         if not prev_dynamic or not prev_resource_aware:
             return
 
-        dynamic_migrations = self._get_migrations(prev_dynamic, dynamic_result.component_assignments)
+        dynamic_migrations = self._get_migrations(
+            prev_dynamic, dynamic_result.component_assignments
+        )
         for comp_id, (old_dev, new_dev) in dynamic_migrations.items():
             self.migration_history['dynamic'].append({
                 'step': step,
@@ -587,7 +587,9 @@ class DynamicMigrationBaselineScenario(BaselineComparisonScenario):
                 'to': new_dev
             })
 
-        ra_migrations = self._get_migrations(prev_resource_aware, resource_aware_result.component_assignments)
+        ra_migrations = self._get_migrations(
+            prev_resource_aware, resource_aware_result.component_assignments
+        )
         for comp_id, (old_dev, new_dev) in ra_migrations.items():
             self.migration_history['resource_aware'].append({
                 'step': step,
@@ -596,12 +598,7 @@ class DynamicMigrationBaselineScenario(BaselineComparisonScenario):
                 'to': new_dev
             })
 
-    def _get_migrations(
-        self,
-        prev_assignments: Dict[str, str],
-        new_assignments: Dict[str, str]
-    ) -> Dict[str, Tuple[str, str]]:
-        """Identify component migrations between assignments."""
+    def _get_migrations(self, prev_assignments: Dict[str, str], new_assignments: Dict[str, str]) -> Dict[str, Tuple[str, str]]:
         migrations = {}
         for comp_id, new_dev in new_assignments.items():
             if comp_id in prev_assignments:
@@ -611,14 +608,8 @@ class DynamicMigrationBaselineScenario(BaselineComparisonScenario):
         return migrations
 
     def cleanup(self) -> None:
-        """Explicitly implement cleanup."""
         if self.logger:
             self.logger.log_event("cleanup", f"Cleaning up {self.__class__.__name__}")
-        # Save migration history or additional cleanup actions
-        if self.migration_history:
-            # e.g., self.logger.log_metrics({"migration_history": self.migration_history})
-            pass
-
         super().cleanup()
 
 
@@ -628,15 +619,12 @@ def run_all_baselines(
     logger: Optional[SimulationLogger] = None
 ) -> Dict[str, ScenarioResult]:
     """
-    Run all baseline comparisons.
-    1) Load the config from 'config_path'.
-    2) Instantiate each baseline scenario class with (config, scenario_output_dir, logger).
-    3) Execute each scenario, store results in a dict.
+    Run all baseline comparisons (Greedy, RoundRobin, Static, DynamicMigration).
     """
-    # 1) Load config
     config = load_scenario_config(config_path)
+    from datetime import datetime
+    from pathlib import Path
 
-    # 2) Prepare scenarios
     baseline_scenarios = [
         GreedyBaselineScenario,
         RoundRobinBaselineScenario,
@@ -673,32 +661,15 @@ def run_all_baselines(
     return results
 
 
-def analyze_baseline_results(
-    results: Dict[str, dict],           # now scenario_name -> dictionary
-    output_dir: Union[str, Path],
-    logger: Optional[SimulationLogger] = None
-) -> Dict:
+def analyze_baseline_results(results: Dict[str, dict],
+                             output_dir: Union[str, Path],
+                             logger: Optional[SimulationLogger] = None) -> Dict:
     """
     Analyze and compare baseline results, returning analysis dictionary.
-
-    Args:
-        results: A dictionary keyed by scenario name (e.g. "GreedyBaselineScenario"),
-                 each value is a dictionary with fields like:
-                   {
-                     "scenario_name": ...,
-                     "start_time": ...,
-                     "end_time": ...,
-                     "metrics": { ... },
-                     "success": bool,
-                     "error": ...
-                   }
-        output_dir: Where to store 'baseline_analysis.json'
-        logger: Optional SimulationLogger for structured logging.
-
-    Returns:
-        A dictionary containing analysis results (latencies, resource efficiency,
-        communication overhead, migration analysis, and summary).
     """
+    import json
+    from pathlib import Path
+
     analysis = {
         'performance_comparison': {},
         'resource_efficiency': {},
@@ -711,11 +682,8 @@ def analyze_baseline_results(
         # Performance comparison
         latencies = {}
         for name, scenario_dict in results.items():
-            # scenario_dict is a dictionary (not ScenarioResult) now
             if not scenario_dict.get('success', False):
-                # skip if scenario was not successful
                 continue
-            # scenario_dict["metrics"] is presumably a dictionary
             pm = scenario_dict["metrics"].get('performance_metrics', {})
             latencies[name] = pm.get('average_latency', 0)
 
@@ -751,17 +719,15 @@ def analyze_baseline_results(
 
         analysis['migration_analysis'] = migrations
 
-        # Calculate summary
+        # Summary
         if latencies:
             best_latency = min(latencies.items(), key=lambda x: x[1])
         else:
             best_latency = None
-
         if utilizations:
             best_util = max(utilizations.items(), key=lambda x: x[1])
         else:
             best_util = None
-
         if comm_overhead:
             lowest_comm = min(comm_overhead.items(), key=lambda x: x[1])
         else:
@@ -773,12 +739,10 @@ def analyze_baseline_results(
             'lowest_communication': lowest_comm
         }
 
-        # Save to file
         output_path = Path(output_dir) / 'baseline_analysis.json'
         with open(output_path, 'w') as f:
             json.dump(analysis, f, indent=2)
 
-        # Log final analysis
         if logger:
             logger.log_metrics({'baseline_analysis': analysis})
 
@@ -788,4 +752,3 @@ def analyze_baseline_results(
         if logger:
             logger.log_error("analysis_error", f"Error analyzing baseline results: {str(e)}")
         return {'error': str(e)}
-
