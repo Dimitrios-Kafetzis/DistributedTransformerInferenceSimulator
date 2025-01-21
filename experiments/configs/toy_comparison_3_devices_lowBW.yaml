@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: experiments/configs/toy_comparison_3_devices_lowBW.yaml
+# Description:
+#   A small "toy" scenario with only 3 devices and low bandwidth.
+#   Useful for quick tests or minimal-scale demonstrations.
+
+network:
+  topology_type: "toy"     # or "edge_cluster", or your custom type
+  num_devices: 3
+  min_bandwidth: 0.01      # intentionally low
+  max_bandwidth: 0.1
+  edge_probability: 0.5
+  seed: 42
+
+resources:
+  memory_mu: 1.0
+  memory_sigma: 0.5
+  memory_min: 2.0
+  memory_max: 8.0
+  compute_mu: 3.5
+  compute_sigma: 0.2
+  compute_min: 5.0e9
+  compute_max: 2.0e10
+  seed: 42
+
+workload:
+  model_type: "SMALL"      # 8 heads, 512 embedding dim
+  initial_sequence_lengths: [16]   # just a small default
+  generation_steps: [5]
+  precision_bytes: 4
+  seed: 42
+
+algorithm:
+  migration_threshold: 0.8
+  backtrack_limit: 5
+  cache_placement_strategy: "colocated"
+  enable_dynamic_adjustment: false
+
+experiment:
+  name: "toy_3_dev_lowBW"
+  description: "Minimal devices, minimal steps, low bandwidth"
+  num_runs: 1
+  checkpoint_interval: 1
+  time_limit: 300
+  metrics_output_dir: "results/toy_comparison_3_dev_lowBW"
+  save_intermediate: false

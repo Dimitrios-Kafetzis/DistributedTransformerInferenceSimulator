@@ -32,7 +32,8 @@ from .baselines import (
     GreedyDistributor,
     RoundRobinDistributor,
     StaticDistributor,
-    DynamicMigrationDistributor
+    DynamicMigrationDistributor,
+    ExactOptimalDistributor
 )
 
 from .utils import (
@@ -56,6 +57,7 @@ __all__ = [
     'RoundRobinDistributor',
     'StaticDistributor',
     'DynamicMigrationDistributor',
+    'ExactOptimalDistributor',
     
     # Utilities
     'ResourceRequirements',

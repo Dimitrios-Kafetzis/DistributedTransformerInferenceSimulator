@@ -95,7 +95,8 @@ class ToyScenario(BaseScenario):
                 device_id=device_id,
                 memory_capacity=caps.memory_capacity,
                 compute_capacity=caps.compute_capacity,
-                is_source=caps.is_source
+                is_source=caps.is_source,
+                logger=self.logger
             )
 
         # (C) Build a minimal 'Network'

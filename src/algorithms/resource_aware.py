@@ -32,7 +32,6 @@ from src.utils.logging import SimulationLogger, LogLevel  # adapt import path if
 from ..core import Device, Network, Transformer, TransformerComponent
 from .utils import ResourceRequirements, CommunicationCost, validate_assignment, compute_3phase_latency
 
-
 @dataclass
 class AssignmentResult:
     """Results from the distribution algorithm."""
@@ -41,19 +40,27 @@ class AssignmentResult:
     estimated_latency: float
     resource_usage: Dict[str, Dict[str, float]]
     is_feasible: bool
-    error: Optional[str] = None  # In case we want to store a message
+    error: Optional[str] = None
     migrations: Optional[List[tuple]] = None
-    # Fields to store per-step communication overhead/time
     communication_time: float = 0.0
     data_transferred_gb: float = 0.0
 
 
 @dataclass
 class ScoringFunction:
-    """Implementation of the scoring function S(i,j,t) from the paper"""
+    """
+    Implements the scoring function S(i,j,t). 
+    We have two modes:
+      (1) 'max' mode => returns max(compute_ratio, memory_ratio, comm_ratio)
+      (2) 'weighted_sum' mode => alpha * compute_ratio + beta * memory_ratio + gamma * comm_ratio.
+    """
+    use_weighted_sum: bool = False  # If True, do the weighted sum approach; otherwise do max(...)
+    alpha: float = 0.4
+    beta: float = 0.3
+    gamma: float = 0.3
 
-    @staticmethod
     def compute(
+        self,
         component: TransformerComponent,
         device: Device,
         network: Network,
@@ -63,30 +70,31 @@ class ScoringFunction:
         generation_step: int
     ) -> float:
         """
-        Compute the scoring function S(i,j,t) as defined in Section IV.
-        Returns infinity for infeasible assignments or source constraints (depending on policy).
+        Returns infinity if infeasible or if we have a policy that forbids device for certain comps.
+        Otherwise:
+          - If use_weighted_sum=False => returns max(compute_ratio, memory_ratio, comm_ratio).
+          - If use_weighted_sum=True  => returns alpha*compute_ratio + beta*memory_ratio + gamma*comm_ratio.
         """
-        # If device is source and component not "input"/"position", treat as infeasible (example policy).
+        # Example policy: skip device if it's a "source" device but comp not input/position
         if device.is_source and component.component_id not in ["input", "position"]:
             return float('inf')
 
-        # Compute base scoring function from memory, compute, communication
+        # Gather the 3 ratio components
         compute_ratio = _compute_ratio(component, device, transformer)
         memory_ratio = _memory_ratio(component, device, transformer, generation_step)
         comm_ratio = _communication_ratio(
-            component, device, network, transformer,
-            current_assignments, cache_assignments
+            component, device, network, transformer, current_assignments, cache_assignments
         )
 
-        return max(compute_ratio, memory_ratio, comm_ratio)
+        if not self.use_weighted_sum:
+            # Old approach
+            return max(compute_ratio, memory_ratio, comm_ratio)
+        else:
+            # Weighted sum approach
+            return self.alpha * compute_ratio + self.beta * memory_ratio + self.gamma * comm_ratio
 
 
-def _compute_ratio(
-    component: TransformerComponent,
-    device: Device,
-    transformer: Transformer
-) -> float:
-    """Calculate computation ratio (eq. 7-8 from the paper)."""
+def _compute_ratio(component: TransformerComponent, device: Device, transformer: Transformer) -> float:
     flops = component.compute_flops(transformer.current_sequence_length)
     if device.compute.capacity <= 0:
         return float('inf')
@@ -99,11 +107,9 @@ def _memory_ratio(
     transformer: Transformer,
     generation_step: int
 ) -> float:
-    """Calculate memory ratio including cache requirements."""
     memory_req = component.compute_memory_requirements(transformer.current_sequence_length)
     if hasattr(component, 'compute_cache_memory'):
         memory_req += component.compute_cache_memory(generation_step)
-
     if device.memory.capacity <= 0:
         return float('inf')
     return memory_req / device.memory.capacity
@@ -117,43 +123,29 @@ def _communication_ratio(
     current_assignments: Dict[str, str],
     cache_assignments: Dict[str, str]
 ) -> float:
-    """
-    Calculate communication ratio based on dependencies and device bandwidth.
-    Summation of the transfer_time for each dependency that’s on a different device.
-    """
     total_comm_cost = 0.0
-    deps = _get_dependencies(component.component_id, transformer)
-
+    deps = _get_dependencies_global(component.component_id, transformer)
     for dep_id in deps:
         if dep_id in current_assignments:
-            source_dev = current_assignments[dep_id]
-            if source_dev != device.device_id:
-                data_size_gb = _estimate_transfer_size(dep_id, component.component_id, transformer)
-                transfer_time = network.calculate_transfer_time(source_dev, device.device_id, data_size_gb)
-                total_comm_cost += transfer_time
-
+            src_dev = current_assignments[dep_id]
+            if src_dev != device.device_id:
+                data_size_gb = _estimate_transfer_size_global(dep_id, component.component_id, transformer)
+                ttime = network.calculate_transfer_time(src_dev, device.device_id, data_size_gb)
+                total_comm_cost += ttime
     return total_comm_cost
 
 
-def _get_dependencies(
-    component_id: str,
-    transformer: Transformer
-) -> Set[str]:
-    """Get dependencies for a component: e.g., projection depends on attention heads."""
-    dependencies = set()
+def _get_dependencies_global(component_id: str, transformer: Transformer) -> Set[str]:
+    deps = set()
     if component_id == "projection":
-        dependencies.update(head.component_id for head in transformer.attention_heads)
+        # depends on all attention heads
+        deps.update(h.component_id for h in transformer.attention_heads)
     elif component_id == "ffn":
-        dependencies.add("projection")
-    return dependencies
+        deps.add("projection")
+    return deps
 
 
-def _estimate_transfer_size(
-    source_id: str,
-    target_id: str,
-    transformer: Transformer
-) -> float:
-    """Estimate size of data transfer between components in GB."""
+def _estimate_transfer_size_global(source_id: str, target_id: str, transformer: Transformer) -> float:
     if source_id.startswith("head_") and target_id == "projection":
         return (transformer.current_sequence_length *
                 transformer.config.head_dim *
@@ -167,8 +159,12 @@ def _estimate_transfer_size(
 
 class ResourceAwareDistributor:
     """
-    Implementation of the resource-aware distribution algorithm
-    from Section IV of the paper.
+    Resource-aware approach from Section IV. 
+    We free ephemeral components each step, preserving head_* or *_cache across steps.
+    
+    This class can do two new modifications:
+      1) Weighted sum vs. max(...) in the scoring function (ScoringFunction has a flag).
+      2) Optional mini-latency check in `_find_best_device`, enabled by `use_partial_latency_check`.
     """
 
     def __init__(
@@ -176,19 +172,32 @@ class ResourceAwareDistributor:
         transformer: Transformer,
         network: Network,
         devices: Dict[str, Device],
-        logger: Optional[SimulationLogger] = None
+        logger: Optional[SimulationLogger] = None,
+        use_weighted_sum: bool = False,
+        alpha: float = 0.4,
+        beta: float = 0.3,
+        gamma: float = 0.3,
+        use_partial_latency_check: bool = False
     ):
         """
-        :param transformer: the Transformer model to be distributed
-        :param network: the network topology
-        :param devices: dict of device_id -> Device objects
-        :param logger: optional SimulationLogger for debug/error messages
+        :param use_weighted_sum: if True, do weighted sum in scoring; otherwise do max.
+        :param alpha, beta, gamma: weights if we do weighted sum
+        :param use_partial_latency_check: if True, we do a mini-latency simulation in `_find_best_device`.
         """
         self.transformer = transformer
         self.network = network
         self.devices = devices
-        self.scoring = ScoringFunction()
-        self.logger = logger  # for structured logging
+        self.logger = logger
+
+        self.use_partial_latency_check = use_partial_latency_check
+
+        # Build the scoring function object
+        self.scoring = ScoringFunction(
+            use_weighted_sum=use_weighted_sum,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma
+        )
 
     def compute_assignment(
         self,
@@ -196,7 +205,6 @@ class ResourceAwareDistributor:
         previous_assignments: Optional[Dict[str, str]] = None,
         previous_cache: Optional[Dict[str, str]] = None
     ) -> AssignmentResult:
-        """Compute optimal component assignments for current generation step."""
 
         if self.logger:
             self.logger.log_event(
@@ -205,86 +213,66 @@ class ResourceAwareDistributor:
                 level=LogLevel.DEBUG
             )
 
-        # Copy or create fresh assignment dicts
-        assignments = {} if previous_assignments is None else previous_assignments.copy()
-        cache_assignments = {} if previous_cache is None else previous_cache.copy()
+        # 1) Deallocate ephemeral from previous step
+        self._reset_device_states_for_step()
 
-        # Reset device states (for a fresh assignment pass)
-        try:
-            for device in self.devices.values():
-                for comp_id in list(device.assigned_components.keys()):
-                    device.deallocate_resources(comp_id)
-        except Exception as ex:
-            if self.logger:
-                self.logger.log_error(
-                    "resource_aware_deallocate_fail",
-                    f"Error deallocating device resources before assignment pass: {str(ex)}"
-                )
-            traceback.print_exc()
+        # 2) Start from previous assignments or empty
+        assignments = {} if not previous_assignments else dict(previous_assignments)
+        cache_assignments = {} if not previous_cache else dict(previous_cache)
 
-        # Sort components by resource demand
+        # 3) Sort components by resource demand (descending)
         try:
             components = self._sort_by_resource_demand()
             if not components:
                 if self.logger:
                     self.logger.log_error(
                         "resource_aware_no_components",
-                        f"No components found in the transformer to assign."
+                        "No components found in the transformer to assign."
                     )
                 return AssignmentResult(
                     component_assignments={},
                     cache_assignments={},
                     estimated_latency=float('inf'),
                     resource_usage=self._get_resource_usage(),
-                    is_feasible=False,
-                    error="No components",
-                    migrations=[],
-                    communication_time=0.0,
-                    data_transferred_gb=0.0
+                    is_feasible=False
                 )
         except Exception as ex:
             if self.logger:
                 self.logger.log_error(
                     "resource_aware_sort_fail",
-                    f"Exception sorting components by resource demand: {str(ex)}"
+                    f"Exception sorting components by demand: {str(ex)}"
                 )
-            traceback.print_exc()
-            # fallback: treat as no components
             return AssignmentResult(
                 component_assignments={},
                 cache_assignments={},
                 estimated_latency=float('inf'),
                 resource_usage=self._get_resource_usage(),
                 is_feasible=False,
-                error=f"Exception in sorting: {str(ex)}",
-                migrations=[],
-                communication_time=0.0,
-                data_transferred_gb=0.0
+                error=f"Sort error: {str(ex)}"
             )
 
-        # Try to assign each component
+        # 4) Assign each component in order
         try:
             for component in components:
                 comp_id = component.component_id
-                memory_req = component.compute_memory_requirements(self.transformer.current_sequence_length)
+                mem_req = component.compute_memory_requirements(self.transformer.current_sequence_length)
                 flops_req = component.compute_flops(self.transformer.current_sequence_length)
-
                 cache_req = 0.0
                 if hasattr(component, 'compute_cache_memory'):
                     cache_req = component.compute_cache_memory(generation_step)
 
+                # ephemeral unless it's head_* or *_cache
+                ephemeral = not (comp_id.startswith("head_") or comp_id.endswith("_cache"))
+
                 best_device = self._find_best_device(
-                    component,
-                    assignments,
-                    cache_assignments,
-                    generation_step
+                    component, assignments, cache_assignments, generation_step
                 )
-                if best_device is None:
-                    # no feasible device
+                if not best_device:
+                    # No feasible device found
                     if self.logger:
                         self.logger.log_error(
                             "resource_aware_no_device",
-                            f"No suitable device found for component={comp_id}"
+                            f"No feasible device for {comp_id}"
                         )
                     return AssignmentResult(
                         component_assignments=assignments,
@@ -292,27 +280,26 @@ class ResourceAwareDistributor:
                         estimated_latency=float('inf'),
                         resource_usage=self._get_resource_usage(),
                         is_feasible=False,
-                        error=f"No suitable device for {comp_id}",
-                        migrations=[],
-                        communication_time=0.0,
-                        data_transferred_gb=0.0
+                        error=f"No device for {comp_id}"
                     )
 
-                # Allocate resources on best_device
-                ok_main = best_device.allocate_resources(comp_id, memory_req, flops_req)
+                # Attempt allocation
+                ok_main = best_device.allocate_resources(comp_id, mem_req, flops_req, ephemeral=ephemeral)
                 ok_cache = True
-                if cache_req > 0.0 and ok_main:
-                    ok_cache = best_device.allocate_resources(f"{comp_id}_cache", cache_req, 0.0)
+                if cache_req > 0 and ok_main:
+                    ok_cache = best_device.allocate_resources(f"{comp_id}_cache", cache_req, 0.0, ephemeral=ephemeral)
 
                 if not (ok_main and ok_cache):
+                    # revert partial success
                     if ok_main:
-                        best_device.deallocate_resources(comp_id)
+                        best_device.deallocate_resources(comp_id, force=True)
                     if ok_cache:
-                        best_device.deallocate_resources(f"{comp_id}_cache")
+                        best_device.deallocate_resources(f"{comp_id}_cache", force=True)
+
                     if self.logger:
                         self.logger.log_error(
-                            "resource_aware_allocation_fail",
-                            f"Failed to allocate resources for component={comp_id} on device={best_device.device_id}"
+                            "resource_aware_alloc_fail",
+                            f"Could not allocate {comp_id} on {best_device.device_id}"
                         )
                     return AssignmentResult(
                         component_assignments=assignments,
@@ -320,13 +307,10 @@ class ResourceAwareDistributor:
                         estimated_latency=float('inf'),
                         resource_usage=self._get_resource_usage(),
                         is_feasible=False,
-                        error=f"Failed allocating {comp_id}",
-                        migrations=[],
-                        communication_time=0.0,
-                        data_transferred_gb=0.0
+                        error=f"Alloc fail for {comp_id}"
                     )
 
-                # success => record assignment
+                # Record
                 assignments[comp_id] = best_device.device_id
                 if cache_req > 0:
                     cache_assignments[comp_id] = best_device.device_id
@@ -335,22 +319,18 @@ class ResourceAwareDistributor:
             if self.logger:
                 self.logger.log_error(
                     "resource_aware_assign_loop_fail",
-                    f"Error during assignment loop: {str(ex)}"
+                    f"Error in assignment loop: {str(ex)}"
                 )
-            traceback.print_exc()
             return AssignmentResult(
                 component_assignments=assignments,
                 cache_assignments=cache_assignments,
                 estimated_latency=float('inf'),
                 resource_usage=self._get_resource_usage(),
                 is_feasible=False,
-                error=f"Exception in assignment loop: {str(ex)}",
-                migrations=[],
-                communication_time=0.0,
-                data_transferred_gb=0.0
+                error=f"Assign loop exception: {str(ex)}"
             )
 
-        # Now validate
+        # 5) Validate final assignment
         try:
             feasible = validate_assignment(
                 assignments,
@@ -364,38 +344,31 @@ class ResourceAwareDistributor:
                 if self.logger:
                     self.logger.log_error(
                         "resource_aware_infeasible",
-                        f"Assignment is not feasible after final validation."
+                        "Final assignment not feasible"
                     )
                 return AssignmentResult(
                     component_assignments=assignments,
                     cache_assignments=cache_assignments,
                     estimated_latency=float('inf'),
                     resource_usage=self._get_resource_usage(),
-                    is_feasible=False,
-                    migrations=[],
-                    communication_time=0.0,
-                    data_transferred_gb=0.0
+                    is_feasible=False
                 )
         except Exception as ex:
             if self.logger:
                 self.logger.log_error(
                     "resource_aware_validation_fail",
-                    f"Exception in validate_assignment: {str(ex)}"
+                    f"Validate assignment error: {str(ex)}"
                 )
-            traceback.print_exc()
             return AssignmentResult(
                 component_assignments=assignments,
                 cache_assignments=cache_assignments,
                 estimated_latency=float('inf'),
                 resource_usage=self._get_resource_usage(),
                 is_feasible=False,
-                error=f"Exception in validation: {str(ex)}",
-                migrations=[],
-                communication_time=0.0,
-                data_transferred_gb=0.0
+                error=f"Validation exception: {str(ex)}"
             )
 
-        # If feasible => compute latency + communication
+        # 6) If feasible => compute concurrency-based latency + comm
         try:
             latency, comm_time, data_gb = self._compute_latency_and_comm(assignments, cache_assignments, generation_step)
             usage = self._get_resource_usage()
@@ -413,64 +386,40 @@ class ResourceAwareDistributor:
             if self.logger:
                 self.logger.log_error(
                     "resource_aware_latency_comm_fail",
-                    f"Exception computing latency/communication: {str(ex)}"
+                    f"Exception in latency/comm calc: {str(ex)}"
                 )
-            traceback.print_exc()
-            usage = self._get_resource_usage()
             return AssignmentResult(
                 component_assignments=assignments,
                 cache_assignments=cache_assignments,
                 estimated_latency=float('inf'),
-                resource_usage=usage,
+                resource_usage=self._get_resource_usage(),
                 is_feasible=False,
-                error=f"Exception computing latency/comm: {str(ex)}",
-                migrations=[],
-                communication_time=0.0,
-                data_transferred_gb=0.0
+                error=f"Latency/comm exception: {str(ex)}"
             )
 
-    def _compute_comm_stats_separately(
-        self,
-        assignments: Dict[str, str],
-        cache_assignments: Dict[str, str],
-        generation_step: int
-    ) -> Tuple[float, float]:
+    # ------------------------------------------------------------------------
+    # Implementation details
+    # ------------------------------------------------------------------------
+
+    def _reset_device_states_for_step(self) -> None:
         """
-        Returns (comm_time, data_transferred_gb) by summing
-        explicit data transfers from assignment => using device bandwidth,
-        ignoring concurrency or pipeline overlap.
+        Only deallocate ephemeral comps (projection, ffn, etc.). 
+        Keep non-ephemeral (heads, caches).
         """
-        total_comm_time = 0.0
-        total_data_gb = 0.0
+        for device in self.devices.values():
+            comps_to_remove = []
+            for comp_id, info in device.assigned_components.items():
+                if info.get("ephemeral", True) is True:
+                    comps_to_remove.append(comp_id)
+            caches_to_remove = []
+            for comp_id, cinfo in device.cache_assignments.items():
+                if cinfo.get("ephemeral", True) is True:
+                    caches_to_remove.append(comp_id)
 
-        try:
-            for comp_id, dev_id in assignments.items():
-                component = self.transformer.get_component(comp_id)
-                deps = self._get_dependencies(comp_id)
-
-                for dep_id in deps:
-                    if dep_id in assignments:
-                        src_dev = assignments[dep_id]
-                        if src_dev != dev_id:
-                            data_size_gb = self._estimate_transfer_size(dep_id, comp_id)
-                            total_data_gb += data_size_gb
-                            ttime = self.network.calculate_transfer_time(src_dev, dev_id, data_size_gb)
-                            total_comm_time += ttime
-                            if self.logger and data_size_gb > 0.0:
-                                self.logger.log_event(
-                                    "resource_aware_comm",
-                                    f"Transferring {data_size_gb:.6f}GB from {src_dev} -> {dev_id} for dep={dep_id}->{comp_id}, time={ttime:.6f}s",
-                                    level=LogLevel.DEBUG
-                                )
-        except Exception as ex:
-            if self.logger:
-                self.logger.log_error(
-                    "resource_aware_comm_stats_fail",
-                    f"Error in _compute_comm_stats_separately: {str(ex)}"
-                )
-            traceback.print_exc()
-
-        return (total_comm_time, total_data_gb)
+            for cid in comps_to_remove:
+                device.deallocate_resources(cid, force=True)
+            for cid in caches_to_remove:
+                device.deallocate_resources(cid, force=True)
 
     def _compute_latency_and_comm(
         self,
@@ -478,72 +427,87 @@ class ResourceAwareDistributor:
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float, float]:
-        """
-        We'll compute concurrency-based total latency from compute_3phase_latency(),
-        then separately compute comm_time + data_gb in a second pass.
-        """
+        # concurrency-based total latency
+        total_latency = compute_3phase_latency(
+            self.transformer,
+            self.devices,
+            self.network,
+            assignments,
+            generation_step,
+            concurrency_mode="sum"  # or "max"/"hybrid" if desired
+        )
+        # Then sum up the data xfers
+        comm_time, data_gb = self._compute_comm_stats_separately(assignments, cache_assignments, generation_step)
+
+        if self.logger:
+            self.logger.log_event(
+                "resource_aware_latency_comm",
+                f"ResourceAware => lat={total_latency:.4f}, comm_time={comm_time:.4f}, data_gb={data_gb:.4f}",
+                level=LogLevel.DEBUG
+            )
+        return (total_latency, comm_time, data_gb)
+
+    def _compute_comm_stats_separately(
+        self,
+        assignments: Dict[str, str],
+        cache_assignments: Dict[str, str],
+        generation_step: int
+    ) -> Tuple[float, float]:
+        total_comm_time = 0.0
+        total_data_gb = 0.0
         try:
-            total_latency = compute_3phase_latency(
-                self.transformer,
-                self.devices,
-                self.network,
-                assignments,
-                generation_step,
-                concurrency_mode="sum"  # or "max" or "hybrid"
-            )
-            comm_time, data_gb = self._compute_comm_stats_separately(
-                assignments, cache_assignments, generation_step
-            )
-            if self.logger:
-                self.logger.log_event(
-                    "resource_aware_latency_comm",
-                    f"Final concurrency-based latency={total_latency:.4f}, comm_time={comm_time:.4f}, data={data_gb:.4f}GB",
-                    level=LogLevel.DEBUG
-                )
-            return (total_latency, comm_time, data_gb)
+            for comp_id, dev_id in assignments.items():
+                deps = self.__get_dependencies(comp_id)
+                for dep_id in deps:
+                    if dep_id in assignments:
+                        src_dev = assignments[dep_id]
+                        if src_dev != dev_id:
+                            data_size_gb = self.__estimate_transfer_size(dep_id, comp_id)
+                            total_data_gb += data_size_gb
+                            ttime = self.network.calculate_transfer_time(src_dev, dev_id, data_size_gb)
+                            total_comm_time += ttime
+
+                            if self.logger and data_size_gb > 0:
+                                self.logger.log_event(
+                                    "resource_aware_comm",
+                                    f"transfer {data_size_gb:.6f}GB from {src_dev}->{dev_id} for dep={dep_id}->{comp_id}, "
+                                    f"time={ttime:.4f}",
+                                    level=LogLevel.DEBUG
+                                )
         except Exception as ex:
             if self.logger:
                 self.logger.log_error(
-                    "resource_aware_latency_comm_exception",
-                    f"Exception in _compute_latency_and_comm: {str(ex)}"
+                    "resource_aware_comm_stats_fail",
+                    f"Exception: {str(ex)}"
                 )
-            traceback.print_exc()
-            return (float('inf'), 0.0, 0.0)
+        return (total_comm_time, total_data_gb)
 
     def _sort_by_resource_demand(self) -> List[TransformerComponent]:
-        """Sort components by (memory+compute) demand in descending order."""
+        """
+        Sort components by (memory + compute) usage, descending.
+        """
         try:
             comps = self.transformer.get_all_components()
             if not comps:
                 return []
             demands = []
-            max_mem = max(dev.memory.capacity for dev in self.devices.values())
-            max_cmp = max(dev.compute.capacity for dev in self.devices.values()) or 1.0
+            max_mem = max(d.memory.capacity for d in self.devices.values())
+            max_cmp = max(d.compute.capacity for d in self.devices.values() or [1.0])
 
             for c in comps:
                 mem = c.compute_memory_requirements(self.transformer.current_sequence_length)
                 flp = c.compute_flops(self.transformer.current_sequence_length)
-                # quick approach: sum normalized
                 score = (mem / max_mem) + (flp / max_cmp)
                 demands.append((score, c))
 
             demands.sort(key=lambda x: x[0], reverse=True)
-            sorted_comps = [d[1] for d in demands]
-            if self.logger:
-                self.logger.log_event(
-                    "resource_aware_sort",
-                    "Sorted components by resource demand (descending)",
-                    level=LogLevel.DEBUG,
-                    sorted_list=[(c.component_id, sc) for sc, c in demands]
-                )
-            return sorted_comps
+            return [item[1] for item in demands]
         except Exception as ex:
             if self.logger:
                 self.logger.log_error(
                     "resource_aware_sort_exception",
-                    f"Exception sorting by resource demand: {str(ex)}"
+                    f"Exception sorting resource demand: {str(ex)}"
                 )
-            traceback.print_exc()
             return []
 
     def _find_best_device(
@@ -554,7 +518,10 @@ class ResourceAwareDistributor:
         generation_step: int
     ) -> Optional[Device]:
         """
-        Pick the device with the minimal scoring function value (S(i,j,t)).
+        For each feasible device, compute:
+          - ratio-based or weighted-sum score from ScoringFunction, 
+          - optionally a partial concurrency-based estimate,
+        and pick the device with the best (lowest) combined measure.
         """
         best_score = float('inf')
         best_dev = None
@@ -567,92 +534,125 @@ class ResourceAwareDistributor:
         if self.logger:
             self.logger.log_event(
                 "resource_aware_find_device",
-                f"Trying to find best device for component={component.component_id}, mem_req={mem_req:.4f}, flops_req={flops_req:.4f}",
+                f"Finding device for {component.component_id}, mem={mem_req:.4f}, flops={flops_req:.4f}",
                 level=LogLevel.DEBUG
             )
 
-        try:
-            for dev in self.devices.values():
-                dev_id = dev.device_id
-                # quick check if feasible ignoring communication
-                if not dev.can_accommodate(mem_req, flops_req):
-                    if self.logger:
-                        self.logger.log_event(
-                            "resource_aware_device_skip",
-                            f"Device={dev_id} cannot accommodate comp={component.component_id}, mem_req={mem_req:.4f}, flops_req={flops_req:.4f}",
-                            level=LogLevel.DEBUG
-                        )
-                    continue
-
-                score_val = ScoringFunction.compute(
-                    component,
-                    dev,
-                    self.network,
-                    self.transformer,
-                    assignments,
-                    cache_assignments,
-                    generation_step
-                )
+        for dev in self.devices.values():
+            # Quick feasibility
+            if not dev.can_accommodate(mem_req, flops_req):
                 if self.logger:
                     self.logger.log_event(
-                        "resource_aware_score",
-                        f"Device={dev_id}, S(i,j,t)={score_val:.4f}",
+                        "resource_aware_device_skip",
+                        f"Device={dev.device_id} can't fit {component.component_id}",
                         level=LogLevel.DEBUG
                     )
+                continue
 
-                if score_val < best_score:
-                    best_score = score_val
-                    best_dev = dev
+            # 1) Ratio-based or weighted-sum scoring
+            ratio_score = self.scoring.compute(
+                component, dev, self.network, self.transformer,
+                assignments, cache_assignments, generation_step
+            )
+            if ratio_score == float('inf'):
+                # not feasible or policy skip
+                continue
 
-            if best_dev and self.logger:
-                self.logger.log_event(
-                    "resource_aware_best_device",
-                    f"Best device for component={component.component_id} is {best_dev.device_id} with score={best_score:.4f}",
-                    level=LogLevel.DEBUG
-                )
-            elif not best_dev and self.logger:
-                self.logger.log_event(
-                    "resource_aware_no_best",
-                    f"No suitable device for component={component.component_id}, mem_req={mem_req:.4f}, flops_req={flops_req:.4f}",
-                    level=LogLevel.DEBUG
-                )
-        except Exception as ex:
-            if self.logger:
-                self.logger.log_error(
-                    "resource_aware_find_device_exception",
-                    f"Exception in _find_best_device for comp={component.component_id}: {str(ex)}"
-                )
-            traceback.print_exc()
+            if not self.use_partial_latency_check:
+                # simpler approach: just use the ratio_score
+                final_score = ratio_score
+            else:
+                # 2) Do a local concurrency-based partial check
+                # Temporarily allocate this component to dev, measure concurrency latency
+                # Then revert it.
+                ephemeral = not (component.component_id.startswith("head_") or component.component_id.endswith("_cache"))
+                ok_main = dev.allocate_resources(component.component_id, mem_req, flops_req, ephemeral=ephemeral)
+                # no separate cache check here for partial approach; you can do it if needed
+                if not ok_main:
+                    # revert any partial
+                    continue
 
+                # Record the assignment in a temporary dict
+                tmp_assignments = dict(assignments)
+                tmp_assignments[component.component_id] = dev.device_id
+
+                # Compute concurrency-based latency in a partial scenario
+                # We do not finalize or validate the entire assignment, 
+                # just measure approximate new latency with concurrency.
+                #   Possibly we do a partial 'compute_3phase_latency' with concurrency_mode, 
+                #   or do the entire existing + this one component assigned.
+                # For simplicity, let's do a partial approach:
+                lat_if_assigned, _, _ = self._compute_latency_and_comm(
+                    tmp_assignments, cache_assignments, generation_step
+                )
+
+                # Revert
+                dev.deallocate_resources(component.component_id, force=True)
+
+                # Combine ratio_score with the partial concurrency measure (or use just concurrency)
+                # Here we take a simple approach: final_score = lat_if_assigned
+                # Or we can do some combination if desired.
+                final_score = lat_if_assigned
+
+            if final_score < best_score:
+                best_score = final_score
+                best_dev = dev
+
+        if self.logger and best_dev:
+            self.logger.log_event(
+                "resource_aware_best_device",
+                f"Best device for {component.component_id} => {best_dev.device_id}, score={best_score:.4f}",
+                level=LogLevel.DEBUG
+            )
         return best_dev
 
+    # ------------------------------------------------------------------------
+    # Helper methods for dependencies and data size
+    # ------------------------------------------------------------------------
     def _get_resource_usage(self) -> Dict[str, Dict[str, float]]:
-        """
-        Build a dictionary describing memory/compute usage and utilization on each device.
-        """
         usage = {}
-        try:
-            for dev_id, dev in self.devices.items():
-                usage[dev_id] = {
-                    'memory_used': dev.memory.used,
-                    'memory_capacity': dev.memory.capacity,
-                    'compute_used': dev.compute.used,
-                    'compute_capacity': dev.compute.capacity,
-                    'compute_utilization': (
-                        dev.compute.used / dev.compute.capacity
-                        if dev.compute.capacity > 0 else 1.0
-                    ),
-                    'memory_utilization': (
-                        dev.memory.used / dev.memory.capacity
-                        if dev.memory.capacity > 0 else 1.0
-                    )
-                }
-        except Exception as ex:
-            if self.logger:
-                self.logger.log_error(
-                    "resource_aware_resource_usage_fail",
-                    f"Exception in _get_resource_usage: {str(ex)}"
+        for dev_id, dev in self.devices.items():
+            usage[dev_id] = {
+                "memory_used": dev.memory.used,
+                "memory_capacity": dev.memory.capacity,
+                "compute_used": dev.compute.used,
+                "compute_capacity": dev.compute.capacity,
+                "compute_utilization": (
+                    dev.compute.used / dev.compute.capacity if dev.compute.capacity > 0 else 1.0
+                ),
+                "memory_utilization": (
+                    dev.memory.used / dev.memory.capacity if dev.memory.capacity > 0 else 1.0
                 )
-            traceback.print_exc()
-
+            }
         return usage
+
+    def __get_dependencies(self, comp_id: str) -> List[str]:
+        """
+        e.g. 'projection' depends on heads, 'ffn' depends on 'projection'.
+        """
+        deps = []
+        if comp_id == "projection":
+            if hasattr(self.transformer, 'attention_heads'):
+                for head in self.transformer.attention_heads:
+                    deps.append(head.component_id)
+        elif comp_id == "ffn":
+            deps.append("projection")
+        return deps
+
+    def __estimate_transfer_size(self, source_id: str, target_id: str) -> float:
+        """
+        Same logic: head->projection or projection->ffn
+        """
+        if source_id.startswith("head_") and target_id == "projection":
+            return (
+                self.transformer.current_sequence_length *
+                self.transformer.config.head_dim *
+                self.transformer.config.precision_bytes
+            ) / (1024**3)
+        elif source_id == "projection" and target_id == "ffn":
+            return (
+                self.transformer.current_sequence_length *
+                self.transformer.config.embedding_dim *
+                self.transformer.config.precision_bytes
+            ) / (1024**3)
+        return 0.0

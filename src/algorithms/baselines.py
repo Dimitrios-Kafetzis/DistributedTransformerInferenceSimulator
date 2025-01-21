@@ -20,6 +20,9 @@
 Defines baseline or simpler distribution algorithms, including GreedyDistributor,
 RoundRobinDistributor, StaticDistributor, and DynamicMigrationDistributor,
 to compare against the resource-aware approach.
+
+Now updated so that only ephemeral blocks are freed each step, while K/V caches
+and attention heads remain allocated across steps (ephemeral=False).
 """
 
 import traceback
@@ -42,16 +45,10 @@ class BaseDistributor(ABC):
         devices: Dict[str, Device],
         logger: Optional[SimulationLogger] = None
     ):
-        """
-        :param transformer: The Transformer model instance (with config, layers, etc.).
-        :param network: The simulated network topology.
-        :param devices: A dict of device_id -> Device objects.
-        :param logger: (Optional) SimulationLogger for structured logging.
-        """
         self.transformer = transformer
         self.network = network
         self.devices = devices
-        self.logger = logger  # store the logger if provided
+        self.logger = logger
         
     @abstractmethod
     def compute_assignment(
@@ -60,43 +57,63 @@ class BaseDistributor(ABC):
         previous_assignments: Optional[Dict[str, str]] = None,
         previous_cache: Optional[Dict[str, str]] = None
     ) -> AssignmentResult:
-        """
-        Subclasses must implement. Returns an AssignmentResult that includes:
-          - Assignments (component->device)
-          - Cache assignments if any
-          - Estimated latency
-          - Resource usage
-          - Feasibility
-          - Migrations (if relevant)
-          - Communication overhead info
-        """
         pass
         
     def _get_resource_usage(self) -> Dict[str, Dict[str, float]]:
-        """Collect current usage from each device. Useful for debugging or building partial results."""
         usage = {}
         for dev_id, device in self.devices.items():
-            mem_used = device.memory.used
-            mem_cap = device.memory.capacity
-            comp_used = device.compute.used
-            comp_cap = device.compute.capacity
             usage[dev_id] = {
-                'memory_used': mem_used,
-                'memory_capacity': mem_cap,
-                'compute_used': comp_used,
-                'compute_capacity': comp_cap,
-                'memory_utilization': (mem_used / mem_cap) if mem_cap > 0 else 1.0,
-                'compute_utilization': (comp_used / comp_cap) if comp_cap > 0 else 1.0
+                'memory_used': device.memory.used,
+                'memory_capacity': device.memory.capacity,
+                'compute_used': device.compute.used,
+                'compute_capacity': device.compute.capacity,
+                'memory_utilization': (
+                    device.memory.used / device.memory.capacity if device.memory.capacity > 0 else 1.0
+                ),
+                'compute_utilization': (
+                    device.compute.used / device.compute.capacity if device.compute.capacity > 0 else 1.0
+                ),
             }
         return usage
-    
+
+    def _reset_device_states_for_step(self) -> None:
+        """
+        Deallocate ephemeral components only. 
+        We skip anything marked ephemeral=False (like K/V caches or attention heads).
+        """
+        for device in self.devices.values():
+            comps_to_remove = []
+            for comp_id, info in device.assigned_components.items():
+                if info.get("ephemeral", True) is True:
+                    comps_to_remove.append(comp_id)
+
+            # For cache assignments
+            caches_to_remove = []
+            for comp_id, cinfo in device.cache_assignments.items():
+                if cinfo.get("ephemeral", True) is True:
+                    caches_to_remove.append(comp_id)
+
+            # Actually remove them if ephemeral
+            for cid in comps_to_remove:
+                device.deallocate_resources(cid, force=True)
+            for cid in caches_to_remove:
+                device.deallocate_resources(cid, force=True)
+
+    def _is_ephemeral_component(self, comp_id: str) -> bool:
+        """
+        E.g., attention heads are ephemeral=False, caches ephemeral=False.
+        Return True for everything else (projection, ffn).
+        """
+        if comp_id.startswith("head_") or comp_id.endswith("_cache"):
+            return False
+        return True
+
     def _estimate_latency(
         self,
         assignments: Dict[str, str],
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> float:
-        """Default minimal or naive latency for baseline. Override if needed."""
         return 0.0
 
     def _estimate_comm_time(
@@ -105,32 +122,22 @@ class BaseDistributor(ABC):
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> float:
-        """Default minimal communication overhead for baseline. Override if needed."""
         return 0.0
 
     def _get_dependencies(self, component_id: str) -> List[str]:
-        """
-        Return a list of dependencies for a given component. 
-        Usually: "projection" depends on all attention heads, "ffn" depends on "projection".
-        """
         deps = []
         if component_id == "projection":
+            # depends on all heads
             if hasattr(self.transformer, 'attention_heads'):
                 for head in self.transformer.attention_heads:
                     deps.append(head.component_id)
         elif component_id == "ffn":
+            # depends on projection
             deps.append("projection")
         return deps
 
-    def _estimate_transfer_size(
-        self,
-        source_id: str,
-        target_id: str
-    ) -> float:
-        """
-        Estimate data size in GB for transferring outputs from source_id to target_id.
-        This is a naive placeholder; real logic can be more elaborate.
-        """
+    def _estimate_transfer_size(self, source_id: str, target_id: str) -> float:
+        # Simple method. Head->projection or projection->ffn
         if source_id.startswith("head_") and target_id == "projection":
             return (self.transformer.current_sequence_length *
                     self.transformer.config.head_dim *
@@ -148,8 +155,7 @@ class BaseDistributor(ABC):
         generation_step: int
     ) -> Tuple[float, float, float]:
         """
-        Can be overridden or used as a fallback for concurrency-based logic, etc.
-        Returns (latency, comm_time, data_gb).
+        Default (no real concurrency). Subclasses can override or do 3-phase logic.
         """
         total_latency = self._estimate_latency(assignments, cache_assignments, generation_step)
         comm_time = self._estimate_comm_time(assignments, cache_assignments, generation_step)
@@ -158,14 +164,15 @@ class BaseDistributor(ABC):
 
 
 class GreedyDistributor(BaseDistributor):
-    """Greedy strategy: assign each component to the first feasible device."""
-
+    """Greedy: assign each component to the first device that can fit it."""
     def compute_assignment(
         self,
         generation_step: int,
         previous_assignments: Optional[Dict[str, str]] = None,
         previous_cache: Optional[Dict[str, str]] = None
     ) -> AssignmentResult:
+
+        self._reset_device_states_for_step()
 
         if self.logger:
             self.logger.log_event(
@@ -178,22 +185,30 @@ class GreedyDistributor(BaseDistributor):
             assignments = {}
             cache_assignments = {}
 
-            # For each component in the transformer
             for component in self.transformer.get_all_components():
                 comp_id = component.component_id
                 memory_req = component.compute_memory_requirements(self.transformer.current_sequence_length)
                 compute_req = component.compute_flops(self.transformer.current_sequence_length)
+                cache_mem = 0.0
                 if hasattr(component, 'compute_cache_memory'):
-                    memory_req += component.compute_cache_memory(generation_step)
+                    cache_mem = component.compute_cache_memory(generation_step)
+
+                # ephemeral or not
+                is_ephemeral = self._is_ephemeral_component(comp_id)
 
                 assigned = False
                 for device in self.devices.values():
-                    if device.can_accommodate(memory_req, compute_req):
+                    ok = device.allocate_resources(
+                        comp_id,
+                        memory_req,
+                        compute_req,
+                        cache_size=cache_mem,
+                        ephemeral=is_ephemeral
+                    )
+                    if ok:
                         assignments[comp_id] = device.device_id
-                        if hasattr(component, 'compute_cache_memory'):
+                        if cache_mem > 0.0:
                             cache_assignments[comp_id] = device.device_id
-                        assigned = True
-                        # Optionally log this assignment
                         if self.logger:
                             self.logger.log_component_assignment(
                                 generation_step,
@@ -201,16 +216,20 @@ class GreedyDistributor(BaseDistributor):
                                 device.device_id,
                                 assignment_type="greedy"
                             )
+                        assigned = True
                         break
 
                 if not assigned:
-                    # Failure: not feasible
+                    usage = self._get_resource_usage()
                     if self.logger:
                         self.logger.log_error(
                             "greedy_assignment_fail",
-                            f"Could not find a device for component={comp_id}, mem_req={memory_req:.4f}, flops_req={compute_req:.4f}"
+                            (
+                                f"Could not find device for {comp_id}, "
+                                f"mem_req={memory_req:.4f}, flops_req={compute_req:.4f}, ephemeral={is_ephemeral}. "
+                                f"Usage:\n{usage}"
+                            )
                         )
-                    usage = self._get_resource_usage()
                     return AssignmentResult(
                         component_assignments=assignments,
                         cache_assignments=cache_assignments,
@@ -222,7 +241,7 @@ class GreedyDistributor(BaseDistributor):
                         data_transferred_gb=0.0
                     )
 
-            # Validate final assignment
+            # Validate
             is_feasible = validate_assignment(
                 assignments,
                 cache_assignments,
@@ -254,7 +273,7 @@ class GreedyDistributor(BaseDistributor):
             if self.logger:
                 self.logger.log_error(
                     "greedy_assignment_exception",
-                    f"Exception in GreedyDistributor compute_assignment: {str(e)}"
+                    f"Exception in GreedyDistributor: {str(e)}"
                 )
             traceback.print_exc()
             usage = self._get_resource_usage()
@@ -269,19 +288,15 @@ class GreedyDistributor(BaseDistributor):
                 data_transferred_gb=0.0
             )
 
+    # Example: separate pass to sum data xfer times
     def _compute_comm_stats_separately(
         self,
         assignments: Dict[str, str],
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float]:
-        """
-        Returns (comm_time, data_gb) by summing data transfers
-        from each dependency, ignoring concurrency or pipeline overlap.
-        """
         total_comm_time = 0.0
         total_data_gb = 0.0
-
         try:
             for comp_id, dev_id in assignments.items():
                 deps = self._get_dependencies(comp_id)
@@ -305,56 +320,47 @@ class GreedyDistributor(BaseDistributor):
             if self.logger:
                 self.logger.log_error(
                     "greedy_comm_stats_fail",
-                    f"Error in _compute_comm_stats_separately: {str(ex)}"
+                    f"Error in comm_stats_separately: {str(ex)}"
                 )
             traceback.print_exc()
 
-        return total_comm_time, total_data_gb
-    
+        return (total_comm_time, total_data_gb)
+
     def _compute_latency_and_comm(
         self,
         assignments: Dict[str, str],
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float, float]:
-        """
-        We'll compute concurrency-based total latency from compute_3phase_latency(),
-        then do a separate pass for comm_time + data_gb.
-        """
         try:
             total_latency = compute_3phase_latency(
-                self.transformer,
-                self.devices,
-                self.network,
-                assignments,
-                generation_step,
-                concurrency_mode="sum"
+                self.transformer, self.devices, self.network,
+                assignments, generation_step, concurrency_mode="sum"
             )
             comm_time, data_gb = self._compute_comm_stats_separately(
-                assignments,
-                cache_assignments,
-                generation_step
+                assignments, cache_assignments, generation_step
             )
             return (total_latency, comm_time, data_gb)
         except Exception as ex:
             if self.logger:
                 self.logger.log_error(
                     "greedy_latency_comm_fail",
-                    f"Exception in _compute_latency_and_comm: {str(ex)}"
+                    f"Exception: {str(ex)}"
                 )
             traceback.print_exc()
             return (float('inf'), 0.0, 0.0)
 
 
 class RoundRobinDistributor(BaseDistributor):
-    """Round-robin distribution: cycle through devices in order."""
-
+    """Round-robin: cycle across devices for each component in order."""
     def compute_assignment(
         self,
         generation_step: int,
         previous_assignments: Optional[Dict[str, str]] = None,
         previous_cache: Optional[Dict[str, str]] = None
     ) -> AssignmentResult:
+
+        self._reset_device_states_for_step()
 
         if self.logger:
             self.logger.log_event(
@@ -373,18 +379,27 @@ class RoundRobinDistributor(BaseDistributor):
                 comp_id = component.component_id
                 mem_req = component.compute_memory_requirements(self.transformer.current_sequence_length)
                 comp_req = component.compute_flops(self.transformer.current_sequence_length)
+                cache_mem = 0.0
                 if hasattr(component, 'compute_cache_memory'):
-                    mem_req += component.compute_cache_memory(generation_step)
+                    cache_mem = component.compute_cache_memory(generation_step)
+
+                ephemeral = self._is_ephemeral_component(comp_id)
 
                 assigned = False
                 attempts = 0
                 while attempts < len(device_list) and not assigned:
                     dev = device_list[idx]
-                    if dev.can_accommodate(mem_req, comp_req):
+                    ok = dev.allocate_resources(
+                        comp_id,
+                        mem_req,
+                        comp_req,
+                        cache_size=cache_mem,
+                        ephemeral=ephemeral
+                    )
+                    if ok:
                         assignments[comp_id] = dev.device_id
-                        if hasattr(component, 'compute_cache_memory'):
+                        if cache_mem > 0.0:
                             cache_assignments[comp_id] = dev.device_id
-                        assigned = True
                         if self.logger:
                             self.logger.log_component_assignment(
                                 generation_step,
@@ -392,16 +407,17 @@ class RoundRobinDistributor(BaseDistributor):
                                 dev.device_id,
                                 assignment_type="round_robin"
                             )
+                        assigned = True
                     idx = (idx + 1) % len(device_list)
                     attempts += 1
 
                 if not assigned:
+                    usage = self._get_resource_usage()
                     if self.logger:
                         self.logger.log_error(
                             "round_robin_assignment_fail",
-                            f"Cannot place component={comp_id}, mem_req={mem_req:.4f}, compute_req={comp_req:.4f}"
+                            f"Cannot place {comp_id}, ephemeral={ephemeral}, usage:\n{usage}"
                         )
-                    usage = self._get_resource_usage()
                     return AssignmentResult(
                         component_assignments=assignments,
                         cache_assignments=cache_assignments,
@@ -413,22 +429,16 @@ class RoundRobinDistributor(BaseDistributor):
                         data_transferred_gb=0.0
                     )
 
-            # Validate
             is_feasible = validate_assignment(
-                assignments,
-                cache_assignments,
-                self.transformer,
-                self.devices,
-                self.network,
-                generation_step
+                assignments, cache_assignments,
+                self.transformer, self.devices,
+                self.network, generation_step
             )
             latency, comm_time, data_gb = self._compute_latency_and_comm(
-                assignments,
-                cache_assignments,
-                generation_step
+                assignments, cache_assignments, generation_step
             )
-            
             usage = self._get_resource_usage()
+
             return AssignmentResult(
                 component_assignments=assignments,
                 cache_assignments=cache_assignments,
@@ -439,11 +449,12 @@ class RoundRobinDistributor(BaseDistributor):
                 communication_time=comm_time,
                 data_transferred_gb=data_gb
             )
-        except Exception as e:
+
+        except Exception as ex:
             if self.logger:
                 self.logger.log_error(
                     "round_robin_assignment_exception",
-                    f"Exception in RoundRobinDistributor compute_assignment: {str(e)}"
+                    f"Exception: {str(ex)}"
                 )
             traceback.print_exc()
             usage = self._get_resource_usage()
@@ -464,10 +475,9 @@ class RoundRobinDistributor(BaseDistributor):
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float]:
-        """Similar logic for comm/time as the Greedy approach."""
+        """Similar approach: sum data xfers ignoring concurrency."""
         total_comm_time = 0.0
         total_data_gb = 0.0
-
         try:
             for comp_id, dev_id in assignments.items():
                 deps = self._get_dependencies(comp_id)
@@ -491,27 +501,21 @@ class RoundRobinDistributor(BaseDistributor):
             if self.logger:
                 self.logger.log_error(
                     "round_robin_comm_stats_fail",
-                    f"Error in _compute_comm_stats_separately: {str(ex)}"
+                    f"Error in comm_stats_separately: {str(ex)}"
                 )
             traceback.print_exc()
+        return (total_comm_time, total_data_gb)
 
-        return total_comm_time, total_data_gb
-    
     def _compute_latency_and_comm(
         self,
         assignments: Dict[str, str],
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float, float]:
-        """Use concurrency-based function plus separate pass for comm/time."""
         try:
             total_latency = compute_3phase_latency(
-                self.transformer,
-                self.devices,
-                self.network,
-                assignments,
-                generation_step,
-                concurrency_mode="sum"
+                self.transformer, self.devices, self.network,
+                assignments, generation_step, concurrency_mode="sum"
             )
             comm_time, data_gb = self._compute_comm_stats_separately(
                 assignments, cache_assignments, generation_step
@@ -521,15 +525,17 @@ class RoundRobinDistributor(BaseDistributor):
             if self.logger:
                 self.logger.log_error(
                     "round_robin_latency_comm_fail",
-                    f"Exception in _compute_latency_and_comm: {str(ex)}"
+                    f"Exception: {str(ex)}"
                 )
             traceback.print_exc()
             return (float('inf'), 0.0, 0.0)
 
 
 class StaticDistributor(BaseDistributor):
-    """Static partitioning: fix the assignment at step 0 and reuse it every step."""
-
+    """
+    Static: pick an initial assignment at step=0 (via Greedy), then reuse it every step.
+    Only ephemeral components get freed each step, but we do not move them around.
+    """
     def __init__(
         self,
         transformer: Transformer,
@@ -548,30 +554,33 @@ class StaticDistributor(BaseDistributor):
         previous_cache: Optional[Dict[str, str]] = None
     ) -> AssignmentResult:
 
+        self._reset_device_states_for_step()
+
         if self.logger:
             self.logger.log_event(
                 "static_compute",
-                f"[StaticDistributor] compute_assignment called, step={generation_step}",
+                f"[StaticDistributor] step={generation_step}",
                 level=LogLevel.DEBUG
             )
 
         try:
-            # If no initial assignment, do a one-time Greedy
+            # On step=0, do a one-time greedy if we have no initial_assignments
             if self.initial_assignments is None:
                 from .baselines import GreedyDistributor
                 gd = GreedyDistributor(self.transformer, self.network, self.devices, logger=self.logger)
                 init_res = gd.compute_assignment(0, None, None)
                 if not init_res.is_feasible:
+                    usage = self._get_resource_usage()
                     if self.logger:
                         self.logger.log_error(
                             "static_initial_fail",
-                            f"Failed initial assignment with Greedy at step=0"
+                            f"Initial Greedy fail at step=0. usage:\n{usage}"
                         )
                     return init_res
                 self.initial_assignments = init_res.component_assignments
                 self.initial_cache = init_res.cache_assignments
 
-            # Validate
+            # Check feasibility of reusing the same assignment
             is_feasible = validate_assignment(
                 self.initial_assignments,
                 self.initial_cache,
@@ -587,6 +596,7 @@ class StaticDistributor(BaseDistributor):
                 generation_step
             )
             usage = self._get_resource_usage()
+
             return AssignmentResult(
                 component_assignments=self.initial_assignments,
                 cache_assignments=self.initial_cache,
@@ -598,11 +608,11 @@ class StaticDistributor(BaseDistributor):
                 data_transferred_gb=data_gb
             )
 
-        except Exception as e:
+        except Exception as ex:
             if self.logger:
                 self.logger.log_error(
                     "static_assignment_exception",
-                    f"Exception in StaticDistributor compute_assignment: {str(e)}"
+                    f"Exception in StaticDistributor: {str(ex)}"
                 )
             traceback.print_exc()
             usage = self._get_resource_usage()
@@ -623,10 +633,9 @@ class StaticDistributor(BaseDistributor):
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float]:
-        """Sum communication times and data for each dependency (no concurrency)."""
+        """Sum comm times ignoring concurrency."""
         total_comm_time = 0.0
         total_data_gb = 0.0
-
         try:
             for comp_id, dev_id in assignments.items():
                 deps = self._get_dependencies(comp_id)
@@ -650,27 +659,21 @@ class StaticDistributor(BaseDistributor):
             if self.logger:
                 self.logger.log_error(
                     "static_comm_stats_fail",
-                    f"Error in _compute_comm_stats_separately: {str(ex)}"
+                    f"Error in comm_stats_separately: {str(ex)}"
                 )
             traceback.print_exc()
+        return (total_comm_time, total_data_gb)
 
-        return total_comm_time, total_data_gb
-    
     def _compute_latency_and_comm(
         self,
         assignments: Dict[str, str],
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float, float]:
-        """Concurrency-based total latency + separate pass for comm."""
         try:
             total_latency = compute_3phase_latency(
-                self.transformer,
-                self.devices,
-                self.network,
-                assignments,
-                generation_step,
-                concurrency_mode="sum"
+                self.transformer, self.devices, self.network,
+                assignments, generation_step, concurrency_mode="sum"
             )
             comm_time, data_gb = self._compute_comm_stats_separately(
                 assignments, cache_assignments, generation_step
@@ -687,8 +690,10 @@ class StaticDistributor(BaseDistributor):
 
 
 class DynamicMigrationDistributor(BaseDistributor):
-    """Dynamic migration that reassigns on threshold exceed (placeholder logic)."""
-
+    """
+    Dynamic approach: re-check feasibility at each step, possibly reassign.
+    (Placeholder: in practice we only do ephemeral frees, or rely on thresholds.)
+    """
     def __init__(
         self,
         transformer: Transformer,
@@ -711,6 +716,8 @@ class DynamicMigrationDistributor(BaseDistributor):
         previous_cache: Optional[Dict[str, str]] = None
     ) -> AssignmentResult:
 
+        self._reset_device_states_for_step()
+
         if self.logger:
             self.logger.log_event(
                 "dynamic_compute",
@@ -719,28 +726,30 @@ class DynamicMigrationDistributor(BaseDistributor):
             )
 
         try:
-            # If we don't have an initial assignment, or no prev, do Greedy
             if self.initial_assignments is None and previous_assignments is None:
+                # do a one-time Greedy
                 from .baselines import GreedyDistributor
                 gd = GreedyDistributor(self.transformer, self.network, self.devices, logger=self.logger)
                 init_res = gd.compute_assignment(generation_step, None, None)
                 init_res.migrations = init_res.migrations or []
-                if not init_res.is_feasible and self.logger:
-                    self.logger.log_error(
-                        "dynamic_initial_greedy_fail",
-                        "Could not do initial assignment via Greedy"
-                    )
+                if not init_res.is_feasible:
+                    usage = self._get_resource_usage()
+                    if self.logger:
+                        self.logger.log_error(
+                            "dynamic_initial_greedy_fail",
+                            "Initial assignment via Greedy not feasible.\n"
+                            f"Device usage:\n{usage}"
+                        )
                 self.initial_assignments = init_res.component_assignments
                 self.initial_cache = init_res.cache_assignments
                 return init_res
 
-            # Otherwise, just re-validate old assignment (placeholder).
             if self.initial_assignments is None:
-                # possibly we have previous_assignments from prior step
-                self.initial_assignments = dict(previous_assignments)
-                self.initial_cache = dict(previous_cache) if previous_cache else {}
+                # fallback if we had a previous
+                self.initial_assignments = dict(previous_assignments or {})
+                self.initial_cache = dict(previous_cache or {})
 
-            # Check feasibility, thresholds, etc. (not implemented fully)
+            # Minimal approach: just re-validate
             is_feasible = validate_assignment(
                 self.initial_assignments,
                 self.initial_cache,
@@ -749,8 +758,6 @@ class DynamicMigrationDistributor(BaseDistributor):
                 self.network,
                 generation_step
             )
-
-            # concurrency-based total
             latency, comm_time, data_gb = self._compute_latency_and_comm(
                 self.initial_assignments,
                 self.initial_cache,
@@ -768,11 +775,12 @@ class DynamicMigrationDistributor(BaseDistributor):
                 communication_time=comm_time,
                 data_transferred_gb=data_gb
             )
-        except Exception as e:
+
+        except Exception as ex:
             if self.logger:
                 self.logger.log_error(
                     "dynamic_assignment_exception",
-                    f"Exception in DynamicMigrationDistributor compute_assignment: {str(e)}"
+                    f"Exception: {str(ex)}"
                 )
             traceback.print_exc()
             usage = self._get_resource_usage()
@@ -793,10 +801,9 @@ class DynamicMigrationDistributor(BaseDistributor):
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float]:
-        """Same approach as in other classes for comm/time, ignoring concurrency."""
+        """Similar to others: sum data from each dep."""
         total_comm_time = 0.0
         total_data_gb = 0.0
-
         try:
             for comp_id, dev_id in assignments.items():
                 deps = self._get_dependencies(comp_id)
@@ -820,27 +827,21 @@ class DynamicMigrationDistributor(BaseDistributor):
             if self.logger:
                 self.logger.log_error(
                     "dynamic_comm_stats_fail",
-                    f"Error in _compute_comm_stats_separately: {str(ex)}"
+                    f"Error in comm_stats_separately: {str(ex)}"
                 )
             traceback.print_exc()
+        return (total_comm_time, total_data_gb)
 
-        return total_comm_time, total_data_gb
-    
     def _compute_latency_and_comm(
         self,
         assignments: Dict[str, str],
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float, float]:
-        """Compute concurrency-based total latency, plus separate pass for comm/time."""
         try:
             total_latency = compute_3phase_latency(
-                self.transformer,
-                self.devices,
-                self.network,
-                assignments,
-                generation_step,
-                concurrency_mode="sum"
+                self.transformer, self.devices, self.network,
+                assignments, generation_step, concurrency_mode="sum"
             )
             comm_time, data_gb = self._compute_comm_stats_separately(
                 assignments, cache_assignments, generation_step
@@ -850,7 +851,228 @@ class DynamicMigrationDistributor(BaseDistributor):
             if self.logger:
                 self.logger.log_error(
                     "dynamic_latency_comm_fail",
-                    f"Exception in _compute_latency_and_comm: {str(ex)}"
+                    f"Exception: {str(ex)}"
                 )
             traceback.print_exc()
             return (float('inf'), 0.0, 0.0)
+
+
+
+class ExactOptimalDistributor(BaseDistributor):
+    """
+    Exact approach: enumerates all possible assignments of each component to
+    each device (for small networks) and picks the assignment with minimal
+    concurrency-based 3-phase latency.
+    This is only feasible for small #devices and small #components.
+    """
+
+    def compute_assignment(
+        self,
+        generation_step: int,
+        previous_assignments: Optional[Dict[str, str]] = None,
+        previous_cache: Optional[Dict[str, str]] = None
+    ) -> AssignmentResult:
+        """
+        Steps:
+          1) reset ephemeral usage
+          2) collect all components
+          3) for each feasible assignment (where memory/compute not exceeded),
+             compute concurrency-based latency => keep best
+        """
+        self._reset_device_states_for_step()
+        if self.logger:
+            self.logger.log_event(
+                "exact_optimal_compute",
+                f"[ExactOptimalDistributor] step={generation_step}",
+                level=LogLevel.DEBUG
+            )
+
+        # get components
+        components = self.transformer.get_all_components()
+        comp_ids = [c.component_id for c in components]
+
+        # We'll store the best scenario
+        best_latency = float('inf')
+        best_assignments: Dict[str, str] = {}
+        best_cache: Dict[str, str] = {}
+        best_usage: Dict[str, Dict[str, float]] = {}
+        feasible_found = False
+
+        # We'll do a brute force: For each component, pick a device
+        # This is device_count^component_count enumerations
+        device_keys = list(self.devices.keys())
+        import itertools
+
+        # We'll create ephemeral flags
+        ephemeral_map = {
+            c.component_id: self._is_ephemeral_component(c.component_id)
+            for c in components
+        }
+
+        # We'll define a helper function that tries to allocate everything for a given assignment
+        def try_assignment(assignment_map: Dict[str, str]):
+            """
+            Returns:
+              (feasible: bool, cache_map: dict, usage: dict, concurrency_latency: float)
+            """
+            # We must copy device states or do a temporary approach
+            # We'll do a 'temp usage' approach
+            # Easiest is to clone memory/compute usage from each device, allocate, check feasibility.
+            # Then if feasible, compute concurrency-based latency.
+            # We'll also build a cache_assignments for the heads that need cache (if any).
+            from copy import deepcopy
+
+            # snapshot states
+            saved_used = {
+                d_id: (dev.memory.used, dev.compute.used,
+                       dict(dev.assigned_components), dict(dev.cache_assignments))
+                for d_id, dev in self.devices.items()
+            }
+
+            # zero ephemeral usage
+            for d_id, dev in self.devices.items():
+                dev.assigned_components = {
+                    k: v for (k, v) in dev.assigned_components.items()
+                    if not v.get("ephemeral", True)  # keep ephemeral=False
+                }
+                dev.cache_assignments = {
+                    k: c for (k, c) in dev.cache_assignments.items()
+                    if not c.get("ephemeral", True)
+                }
+
+                # recalc used
+                dev.memory.used = sum(float(x["memory"]) for x in dev.assigned_components.values())
+                dev.memory.used += sum(float(x["memory"]) for x in dev.cache_assignments.values())
+                dev.compute.used = sum(float(x["compute"]) for x in dev.assigned_components.values())
+
+            # Now allocate each component
+            local_cache_assign = {}
+            for cid in comp_ids:
+                # find the component
+                comp_obj = next(c for c in components if c.component_id == cid)
+                mem_req = comp_obj.compute_memory_requirements(self.transformer.current_sequence_length)
+                comp_req = comp_obj.compute_flops(self.transformer.current_sequence_length)
+                ccache_req = 0.0
+                if hasattr(comp_obj, "compute_cache_memory"):
+                    ccache_req = comp_obj.compute_cache_memory(generation_step)
+                ephemeral_flag = ephemeral_map[cid]
+
+                # which device
+                dev_id = assignment_map[cid]
+                d = self.devices[dev_id]
+                ok_main = d.allocate_resources(cid, mem_req, comp_req, ephemeral=ephemeral_flag)
+                if not ok_main:
+                    # revert
+                    # restore
+                    for dd_id, (m_used, c_used, assigned_c, cache_c) in saved_used.items():
+                        self.devices[dd_id].memory.used = m_used
+                        self.devices[dd_id].compute.used = c_used
+                        self.devices[dd_id].assigned_components = assigned_c
+                        self.devices[dd_id].cache_assignments = cache_c
+                    return (False, {}, {}, float('inf'))
+
+                if ccache_req > 0:
+                    ok_cache = d.allocate_resources(f"{cid}_cache", ccache_req, 0.0, ephemeral=ephemeral_flag)
+                    if not ok_cache:
+                        # revert
+                        for dd_id, (m_used, c_used, assigned_c, cache_c) in saved_used.items():
+                            self.devices[dd_id].memory.used = m_used
+                            self.devices[dd_id].compute.used = c_used
+                            self.devices[dd_id].assigned_components = assigned_c
+                            self.devices[dd_id].cache_assignments = cache_c
+                        return (False, {}, {}, float('inf'))
+                    local_cache_assign[cid] = dev_id
+
+            # if we get here => feasible
+            # compute concurrency-based latency
+            assign_for_latency = dict(assignment_map)  # comp_id->device
+            concurrency_latency = compute_3phase_latency(
+                self.transformer, self.devices, self.network, assign_for_latency, generation_step, concurrency_mode="sum"
+            )
+            usage_now = self._get_resource_usage()
+            # revert or keep? We want to keep it if we found best? Let's always revert after measure, then re-allocate the best
+            # but we'll just revert for safety
+            final_usage = usage_now
+
+            for dd_id, (m_used, c_used, assigned_c, cache_c) in saved_used.items():
+                self.devices[dd_id].memory.used = m_used
+                self.devices[dd_id].compute.used = c_used
+                self.devices[dd_id].assigned_components = assigned_c
+                self.devices[dd_id].cache_assignments = cache_c
+
+            return (True, local_cache_assign, final_usage, concurrency_latency)
+
+        # building all device assignments for each component
+        # We'll skip ephemeral re-assign for heads that are non-ephemeral? Actually we won't skip. We can place heads anywhere
+        # because the scenario might want it. But if you want the privacy constraint or something, you can add it. We'll skip.
+
+        import itertools
+        dev_count = len(device_keys)
+
+        # The brute force approach: cartesian product of device_keys for comp_ids
+        # e.g. for comp in comp_ids, pick device in device_keys => dev_count^len(comp_ids) combos
+        for combo in itertools.product(device_keys, repeat=len(comp_ids)):
+            # combo is a tuple, e.g. ('device_0','device_1','device_1') for 3 comps
+            assignment_map = {}
+            for i, cid in enumerate(comp_ids):
+                assignment_map[cid] = combo[i]
+
+            feasible_flag, local_cache_map, usage_now, concurrency_lat = try_assignment(assignment_map)
+            if feasible_flag and concurrency_lat < best_latency:
+                best_latency = concurrency_lat
+                best_assignments = dict(assignment_map)
+                best_cache = dict(local_cache_map)
+                best_usage = usage_now
+                feasible_found = True
+
+        if not feasible_found:
+            # no feasible assignment
+            usage = self._get_resource_usage()
+            return AssignmentResult(
+                component_assignments={},
+                cache_assignments={},
+                estimated_latency=float('inf'),
+                resource_usage=usage,
+                is_feasible=False,
+                migrations=[],
+                communication_time=0.0,
+                data_transferred_gb=0.0
+            )
+        else:
+            # re-allocate for best assignment so the device states are consistent
+            # or we can skip if we don't rely on device states after this
+            # We'll do a final pass that actually assigns them so if next step uses them, it's correct
+            self._reset_device_states_for_step()
+            for cid in comp_ids:
+                comp_obj = next(c for c in components if c.component_id == cid)
+                mem_req = comp_obj.compute_memory_requirements(self.transformer.current_sequence_length)
+                comp_req = comp_obj.compute_flops(self.transformer.current_sequence_length)
+                ephemeral_flag = ephemeral_map[cid]
+                dev_id = best_assignments[cid]
+                dev = self.devices[dev_id]
+                dev.allocate_resources(cid, mem_req, comp_req, ephemeral=ephemeral_flag)
+                if cid in best_cache:
+                    ccache_req = 0.0
+                    if hasattr(comp_obj, 'compute_cache_memory'):
+                        ccache_req = comp_obj.compute_cache_memory(generation_step)
+                    dev.allocate_resources(f"{cid}_cache", ccache_req, 0.0, ephemeral=ephemeral_flag)
+
+            final_usage = self._get_resource_usage()
+
+            # We'll do no advanced comm_time for now
+            # If you want to sum data, you can do a separate pass
+            # We'll do concurrency-based approach => best_latency, comm_time=0
+            # or we can do a separate sum of data
+            # For clarity, let's keep comm_time=0
+            # Data transferred is 0 for a single-step? We can do more advanced if we want
+            return AssignmentResult(
+                component_assignments=best_assignments,
+                cache_assignments=best_cache,
+                estimated_latency=best_latency,
+                resource_usage=final_usage,
+                is_feasible=True,
+                migrations=[],
+                communication_time=0.0,
+                data_transferred_gb=0.0
+            )
+

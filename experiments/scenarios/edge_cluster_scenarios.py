@@ -93,7 +93,8 @@ class EdgeClusterBaseScenario(BaseScenario):
                 device_id=device_id,
                 memory_capacity=caps.memory_capacity,
                 compute_capacity=caps.compute_capacity,
-                is_source=caps.is_source
+                is_source=caps.is_source,
+                logger=self.logger
             )
 
         # 4. Set up a default single workload if config has a single model_type

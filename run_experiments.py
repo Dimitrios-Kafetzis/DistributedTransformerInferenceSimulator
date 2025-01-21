@@ -56,7 +56,7 @@ from experiments.scenarios.common import ScenarioResult
 # Import toy scenarios (original "ToyScenario" and new "ToyComparisonScenario")
 try:
     from experiments.scenarios.toy_scenarios import ToyScenario
-    from experiments.scenarios.toy_comparison_scenarios import ToyComparisonScenario
+    from experiments.scenarios.toy_comparison_scenarios import (ToyComparisonScenario, ToyOptimalComparisonScenario)
     TOY_AVAILABLE = True
 except ImportError:
     # If you haven't created toy_scenarios.py or the new class yet, this will fail
@@ -70,6 +70,7 @@ def setup_directories(base_dir: str = "results") -> dict:
         'base': Path(base_dir) / timestamp,
         'toy': Path(base_dir) / timestamp / 'toy',
         'toy_comparison': Path(base_dir) / timestamp / 'toy_comparison',
+        'toy_optimal': Path(base_dir) / timestamp / 'toy_comparison',
         'edge_cluster': Path(base_dir) / timestamp / 'edge_cluster',
         'distributed_edge': Path(base_dir) / timestamp / 'distributed_edge',
         'hybrid_cloud': Path(base_dir) / timestamp / 'hybrid_cloud',
@@ -143,7 +144,7 @@ def run_toy_comparison_experiments(output_dir: Path, logger: SimulationLogger) -
     logger.log_event("experiment", "Starting toy comparison scenario experiments")
 
     # We can reuse the same toy_example.yaml or create a toy_comparison.yaml
-    config_path = "experiments/configs/toy_comparison.yaml"
+    config_path = "experiments/configs/toy_comparison_48_devices_hybrid.yaml"
 
     scenario_dir = output_dir
     scenario_dir.mkdir(exist_ok=True)
@@ -162,6 +163,32 @@ def run_toy_comparison_experiments(output_dir: Path, logger: SimulationLogger) -
     results["toy_comparison"] = scenario_result_to_dict(sr)
     return results
 
+def run_toy_optimal_comparison_experiments(output_dir: Path, logger: SimulationLogger) -> dict:
+    results = {}
+    if not TOY_AVAILABLE:
+        logger.log_event("experiment", "Toy scenarios not available - skipping toy_optimal scenario")
+        return results
+
+    logger.log_event("experiment", "Starting toy optimal comparison scenario")
+
+    # Suppose we have a config file specifically for toy_optimal, e.g.:
+    config_path = "experiments/configs/toy_optimal_comparison.yaml"
+
+    scenario_dir = output_dir
+    scenario_dir.mkdir(exist_ok=True)
+
+    logger.log_event("scenario", "Running ToyOptimalComparisonScenario (includes exact baseline)")
+
+    scenario_config = load_config(config_path)
+    from experiments.scenarios.toy_comparison_scenarios import ToyOptimalComparisonScenario
+    scenario = ToyOptimalComparisonScenario(
+        config=scenario_config,
+        output_dir=scenario_dir,
+        logger=logger
+    )
+    sr = scenario.execute()
+    results["toy_comparison"] = scenario_result_to_dict(sr)
+    return results
 
 def run_edge_cluster_experiments(output_dir: Path, logger: SimulationLogger) -> dict:
     """Run all edge cluster experiments (basic, scalability, failure)."""
@@ -407,6 +434,7 @@ def main():
                         choices=[
                             'toy',              # Only runs the random usage "ToyScenario"
                             'toy_comparison',   # Only runs the baseline vs. RA "ToyComparisonScenario"
+                            'toy_optimal',
                             'edge_cluster',
                             'distributed_edge',
                             'hybrid_cloud',
@@ -440,6 +468,10 @@ def main():
         # If user wants "toy_comparison" or "all"
         if scenario_choice in ['toy_comparison', 'all']:
             results['toy_comparison'] = run_toy_comparison_experiments(dirs['toy_comparison'], logger)
+        
+        # If user wants "toy_optimal" or "all"
+        if scenario_choice in ['toy_optimal','all']:
+            results['toy_optimal'] = run_toy_optimal_comparison_experiments(dirs['toy_optimal'], logger)
 
         # If user wants "edge_cluster" or "all"
         if scenario_choice in ['edge_cluster', 'all']:

@@ -1,0 +1,56 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: experiments/configs/toy_comparison_48_devices_hybrid.yaml
+# Description:
+#   A larger-scale scenario with 48 devices, representing a hybrid cloud-edge
+#   environment. This file uses the EXTRA_LARGE model type to illustrate
+#   how the system handles a very large model.
+
+network:
+  topology_type: "hybrid_cloud_edge"
+  num_devices: 48
+  min_bandwidth: 0.1
+  max_bandwidth: 40.0
+  edge_probability: 0.8
+  seed: 2025
+
+resources:
+  memory_mu: 2.0
+  memory_sigma: 0.7
+  memory_min: 4.0
+  memory_max: 64.0
+  compute_mu: 5.0
+  compute_sigma: 0.4
+  compute_min: 1.0e9
+  compute_max: 1.0e10
+  seed: 2025
+
+workload:
+  model_type: "LARGE"  # <--- Key difference: an extremely large model 
+  initial_sequence_lengths: [128]
+  generation_steps: [500]  # you can push steps more if you want
+  precision_bytes: 4
+  seed: 2025
+
+algorithm:
+  migration_threshold: 0.9
+  backtrack_limit: 30
+  cache_placement_strategy: "colocated"
+  enable_dynamic_adjustment: true
+
+experiment:
+  name: "toy_48_dev_hybrid"
+  description: "48-device scenario bridging cloud and edge, using MEDIUM model"
+  num_runs: 1
+  checkpoint_interval: 5
+  time_limit: 2400
+  metrics_output_dir: "results/toy_comparison_48_dev_hybrid"
+  save_intermediate: true

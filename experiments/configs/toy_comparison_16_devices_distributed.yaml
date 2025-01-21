@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: experiments/configs/toy_comparison_16_devices_distributed.yaml
+# Description:
+#   A toy scenario but with 16 devices to mimic a distributed edge environment
+#   with moderate or large scale. Good for highlighting distribution strategies.
+
+network:
+  topology_type: "distributed_edge"
+  num_devices: 16
+  min_bandwidth: 1.0
+  max_bandwidth: 10.0
+  edge_probability: 0.7
+  seed: 999
+
+resources:
+  memory_mu: 1.5
+  memory_sigma: 0.6
+  memory_min: 4.0
+  memory_max: 16.0
+  compute_mu: 4.2
+  compute_sigma: 0.3
+  compute_min: 1.0e10
+  compute_max: 1.0e11
+  seed: 999
+
+workload:
+  model_type: "LARGE"   # or "EXTRA_LARGE", if you want to push it further
+  initial_sequence_lengths: [64]
+  generation_steps: [10]
+  precision_bytes: 4
+  seed: 999
+
+algorithm:
+  migration_threshold: 0.85
+  backtrack_limit: 20
+  cache_placement_strategy: "colocated"
+  enable_dynamic_adjustment: false
+
+experiment:
+  name: "toy_16_dev_distributed"
+  description: "16-device scenario emulating a distributed edge environment"
+  num_runs: 1
+  checkpoint_interval: 2
+  time_limit: 1200
+  metrics_output_dir: "results/toy_comparison_16_dev_distributed"
+  save_intermediate: true

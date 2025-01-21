@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: experiments/configs/toy_comparison_5_devices_mediumBW.yaml
+# Description:
+#   A slightly larger "toy" scenario with 5 devices and medium-range bandwidth.
+#   Demonstrates somewhat bigger cluster behavior than the 3-device version.
+
+network:
+  topology_type: "toy"
+  num_devices: 5
+  min_bandwidth: 0.5
+  max_bandwidth: 2.0
+  edge_probability: 0.5
+  seed: 123
+
+resources:
+  memory_mu: 1.0
+  memory_sigma: 0.5
+  memory_min: 2.0
+  memory_max: 10.0
+  compute_mu: 4.0
+  compute_sigma: 0.3
+  compute_min: 5.0e9
+  compute_max: 5.0e10
+  seed: 123
+
+workload:
+  model_type: "MEDIUM"    # 16 heads, 1024 embedding dim
+  initial_sequence_lengths: [32]
+  generation_steps: [5]
+  precision_bytes: 4
+  seed: 123
+
+algorithm:
+  migration_threshold: 0.8
+  backtrack_limit: 10
+  cache_placement_strategy: "colocated"
+  enable_dynamic_adjustment: false
+
+experiment:
+  name: "toy_5_dev_mediumBW"
+  description: "5-device scenario with moderate bandwidth"
+  num_runs: 1
+  checkpoint_interval: 1
+  time_limit: 300
+  metrics_output_dir: "results/toy_comparison_5_dev_mediumBW"
+  save_intermediate: false

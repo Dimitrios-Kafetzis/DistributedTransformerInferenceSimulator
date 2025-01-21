@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2024 Dimitrios Kafetzis
+#
+# This file is part of the Transformer Inference Simulator project.
+# Licensed under the MIT License; you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#   https://opensource.org/licenses/MIT
+#
+# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: experiments/configs/toy_optimal_comparison.yaml
+# Description:
+#   A minimal config for toy_optimal_comparison scenario:
+#   2 devices, small model with 2 heads, short steps
+
+network:
+  topology_type: "toy"   # or "edge_cluster" for a minimal approach
+  num_devices: 4
+  min_bandwidth: 0.1
+  max_bandwidth: 0.5
+  edge_probability: 0.5
+  seed: 123
+
+resources:
+  memory_mu: 0.8
+  memory_sigma: 0.3
+  memory_min: 1.0
+  memory_max: 4.0
+  compute_mu: 3.0
+  compute_sigma: 0.3
+  compute_min: 10.0e9
+  compute_max: 10.0e10
+  seed: 123
+
+workload:
+  model_type: "SMALL"   # Suppose SMALL means 8 heads, but let's override in code if we want fewer
+  initial_sequence_lengths: [16]
+  generation_steps: [5]
+  precision_bytes: 4
+  seed: 123
+
+algorithm:
+  migration_threshold: 0.9
+  backtrack_limit: 10
+  cache_placement_strategy: "colocated"
+  enable_dynamic_adjustment: false
+
+experiment:
+  name: "toy_optimal"
+  description: "Compare resource-aware vs. exact approach in a 2-device scenario"
+  num_runs: 1
+  checkpoint_interval: 1
+  time_limit: 300
+  metrics_output_dir: "results/toy_optimal"
+  save_intermediate: false

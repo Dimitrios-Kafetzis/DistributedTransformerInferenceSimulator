@@ -26,7 +26,6 @@ BandwidthManager for assigning link bandwidths in the network.
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import numpy as np
-from ..core import Device
 
 @dataclass
 class DeviceCapabilities:
@@ -71,58 +70,45 @@ class ResourceDistributor:
         if seed is not None:
             np.random.seed(seed)
             
-        # Default tier proportions (can be customized)
+        # Default tier proportions (example)
         self.tier_proportions = {
-            'cloud': 0.1,    # 10% cloud nodes
-            'regional': 0.3, # 30% regional nodes
-            'edge': 0.6      # 60% edge nodes
+            'cloud': 0.1,      # 10% cloud nodes
+            'regional': 0.3,   # 30% regional
+            'edge': 0.6        # 60% edge
         }
         
     def generate_capabilities(self) -> Dict[str, DeviceCapabilities]:
         """Generate capabilities for all devices"""
         capabilities = {}
         
-        # Calculate number of devices per tier
+        # For tiering:
         num_cloud = max(1, int(self.num_devices * self.tier_proportions['cloud']))
         num_regional = max(1, int(self.num_devices * self.tier_proportions['regional']))
         num_edge = self.num_devices - num_cloud - num_regional
         
-        # Generate cloud node capabilities (highest resources)
-        cloud_capabilities = self._generate_tier_capabilities(
-            num_cloud,
-            memory_multiplier=4.0,
-            compute_multiplier=4.0,
-            tier="cloud"
+        # Cloud
+        cloud_caps = self._generate_tier_capabilities(
+            num_cloud, memory_multiplier=4.0, compute_multiplier=4.0, tier="cloud"
+        )
+        # Regional
+        regional_caps = self._generate_tier_capabilities(
+            num_regional, memory_multiplier=2.0, compute_multiplier=2.0, tier="regional"
+        )
+        # Edge
+        edge_caps = self._generate_tier_capabilities(
+            num_edge, memory_multiplier=1.0, compute_multiplier=1.0, tier="edge"
         )
         
-        # Generate regional node capabilities (medium resources)
-        regional_capabilities = self._generate_tier_capabilities(
-            num_regional,
-            memory_multiplier=2.0,
-            compute_multiplier=2.0,
-            tier="regional"
-        )
-        
-        # Generate edge node capabilities (base resources)
-        edge_capabilities = self._generate_tier_capabilities(
-            num_edge,
-            memory_multiplier=1.0,
-            compute_multiplier=1.0,
-            tier="edge"
-        )
-        
-        # Combine all capabilities
         device_id = 0
-        for caps in [cloud_capabilities, regional_capabilities, edge_capabilities]:
-            for capability in caps:
-                capabilities[f"device_{device_id}"] = capability
+        for tier_list in [cloud_caps, regional_caps, edge_caps]:
+            for item in tier_list:
+                capabilities[f"device_{device_id}"] = item
                 device_id += 1
-                
-        # Designate first device as source node
+        
+        # Mark the first device as source
         if capabilities:
-            first_device = capabilities["device_0"]
-            first_device.is_source = True
-            
+            capabilities["device_0"].is_source = True
+        
         return capabilities
         
     def _generate_tier_capabilities(
@@ -132,39 +118,35 @@ class ResourceDistributor:
         compute_multiplier: float,
         tier: str
     ) -> List[DeviceCapabilities]:
-        """Generate capabilities for devices in a specific tier"""
-        capabilities = []
+        capabilities_list = []
         
-        # After sampling, clamp to [2,16]
-        # Generate memory capacities
-        memory_capacities = np.clip(
+        mem_vals = np.clip(
             self.memory_dist.sample(num_devices) * memory_multiplier,
             2.0, 16.0
         )
-        # Generate compute capacities
-        compute_capacities = np.clip(
+        comp_vals = np.clip(
             self.compute_dist.sample(num_devices) * compute_multiplier,
-            10.0e9, 100.0e9  # whatever range you want for compute between 10 GFLOPs to 100GFLOPs
+            1.0e10, 1.0e11
         )
         
-        # Create DeviceCapabilities objects
         for i in range(num_devices):
-            capabilities.append(DeviceCapabilities(
-                memory_capacity=float(memory_capacities[i]),
-                compute_capacity=float(compute_capacities[i]),
+            capabilities_list.append(DeviceCapabilities(
+                memory_capacity=float(mem_vals[i]),
+                compute_capacity=float(comp_vals[i]),
                 device_tier=tier
             ))
-            
-        return capabilities
+        return capabilities_list
 
 class BandwidthManager:
-    """Manages bandwidth assignments for network links"""
+    """
+    Manages bandwidth assignments for links, e.g. cloud > regional > edge.
+    """
     
     def __init__(
         self,
-        cloud_bandwidth: Tuple[float, float] = (20.0, 40.0),    # Gbps
-        regional_bandwidth: Tuple[float, float] = (5.0, 10.0),   # Gbps
-        edge_bandwidth: Tuple[float, float] = (0.1, 1.0)        # Gbps
+        cloud_bandwidth: Tuple[float, float] = (20.0, 40.0),
+        regional_bandwidth: Tuple[float, float] = (5.0, 10.0),
+        edge_bandwidth: Tuple[float, float] = (0.1, 1.0)
     ):
         self.bandwidth_ranges = {
             'cloud': cloud_bandwidth,
@@ -172,86 +154,66 @@ class BandwidthManager:
             'edge': edge_bandwidth
         }
         
-    def get_bandwidth(
-        self,
-        source_tier: str,
-        target_tier: str
-    ) -> float:
-        """Get bandwidth for a link between two tiers"""
-        # Use the lower tier's bandwidth range for inter-tier connections
-        if source_tier == target_tier:
-            bandwidth_range = self.bandwidth_ranges[source_tier]
-        else:
-            lower_tier = min(
-                source_tier,
-                target_tier,
-                key=lambda x: ['edge', 'regional', 'cloud'].index(x)
-            )
-            bandwidth_range = self.bandwidth_ranges[lower_tier]
-            
-        return np.random.uniform(bandwidth_range[0], bandwidth_range[1])
+    def get_bandwidth(self, source_tier: str, target_tier: str) -> float:
+        """
+        Return some random bandwidth for a link between source_tier and target_tier.
+        Uses the "lower" tier as the limiting factor.
+        """
+        tier_order = ['edge', 'regional', 'cloud']
+        lower_tier = min(source_tier, target_tier, key=lambda x: tier_order.index(x))
+        bw_range = self.bandwidth_ranges[lower_tier]
+        return np.random.uniform(bw_range[0], bw_range[1])
 
-def create_devices(
-    capabilities: Dict[str, DeviceCapabilities]
-) -> Dict[str, Device]:
-    """Create Device objects from capabilities"""
-    devices = {}
+def create_devices(capabilities: Dict[str, DeviceCapabilities]):
+    """
+    Create actual Device instances from the capabilities.
+    We do a local import of `Device` here to avoid top-level import from core.
+    """
+    from ..core import Device
     
-    for device_id, capability in capabilities.items():
-        devices[device_id] = Device(
-            device_id=device_id,
-            memory_capacity=capability.memory_capacity,
-            compute_capacity=capability.compute_capacity,
-            is_source=capability.is_source
+    devices = {}
+    for dev_id, caps in capabilities.items():
+        devices[dev_id] = Device(
+            device_id=dev_id,
+            memory_capacity=caps.memory_capacity,
+            compute_capacity=caps.compute_capacity,
+            is_source=caps.is_source
         )
-        
     return devices
 
-def validate_resource_distribution(
-    capabilities: Dict[str, DeviceCapabilities]
-) -> bool:
-    """Validate resource distribution properties"""
+def validate_resource_distribution(capabilities: Dict[str, DeviceCapabilities]) -> bool:
+    """Check if we have at least one source, positive resources, valid tiers, etc."""
     if not capabilities:
         return False
-        
-    # Ensure at least one source device
-    if not any(cap.is_source for cap in capabilities.values()):
+    
+    # Must have at least one source
+    if not any(caps.is_source for caps in capabilities.values()):
         return False
-        
-    # Ensure positive resource values
-    for cap in capabilities.values():
-        if cap.memory_capacity <= 0 or cap.compute_capacity <= 0:
+    
+    # All must have positive resource
+    for caps in capabilities.values():
+        if caps.memory_capacity <= 0 or caps.compute_capacity <= 0:
             return False
-            
-    # Ensure valid device tiers
+    
     valid_tiers = {'cloud', 'regional', 'edge'}
-    if not all(cap.device_tier in valid_tiers for cap in capabilities.values()):
+    if not all(caps.device_tier in valid_tiers for caps in capabilities.values()):
         return False
-        
+    
     return True
 
-def get_tier_statistics(
-    capabilities: Dict[str, DeviceCapabilities]
-) -> Dict[str, Dict[str, float]]:
-    """Calculate statistics for each device tier"""
+def get_tier_statistics(capabilities: Dict[str, DeviceCapabilities]):
+    """Compute stats per tier."""
     tier_stats = {}
-    
     for tier in ['cloud', 'regional', 'edge']:
-        tier_devices = [
-            cap for cap in capabilities.values()
-            if cap.device_tier == tier
-        ]
-        
-        if tier_devices:
-            memory_values = [dev.memory_capacity for dev in tier_devices]
-            compute_values = [dev.compute_capacity for dev in tier_devices]
-            
+        tier_list = [c for c in capabilities.values() if c.device_tier == tier]
+        if tier_list:
+            mem_vals = [c.memory_capacity for c in tier_list]
+            cmp_vals = [c.compute_capacity for c in tier_list]
             tier_stats[tier] = {
-                'count': len(tier_devices),
-                'avg_memory': np.mean(memory_values),
-                'std_memory': np.std(memory_values),
-                'avg_compute': np.mean(compute_values),
-                'std_compute': np.std(compute_values)
+                'count': len(tier_list),
+                'avg_memory': float(np.mean(mem_vals)),
+                'std_memory': float(np.std(mem_vals)),
+                'avg_compute': float(np.mean(cmp_vals)),
+                'std_compute': float(np.std(cmp_vals)),
             }
-            
     return tier_stats
