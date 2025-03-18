@@ -1,38 +1,174 @@
 # Transformer Inference Simulator
 
-A Python-based simulator for distributed transformer inference across edge, cluster and hybrid cloud environments.
+A Python-based simulation framework for resource-aware, distributed Transformer inference. This simulator is designed to model and optimize the inference of Transformer models across heterogeneous environments such as edge clusters, distributed edge networks, and hybrid cloud-edge deployments.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture and Project Structure](#architecture-and-project-structure)
+  - [Algorithms](#algorithms)
+  - [Core Components](#core-components)
+  - [Simulation Engine](#simulation-engine)
+  - [Utilities](#utilities)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [Running Experiments](#running-experiments)
+  - [Simulation Workflow](#simulation-workflow)
+  - [Metrics and Analysis](#metrics-and-analysis)
+- [Configuration](#configuration)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+- [Contact](#contact)
+
+---
 
 ## Overview
 
-This project provides a simulation framework for studying and optimizing transformer model inference across distributed computing environments. It supports:
+The **Transformer Inference Simulator** is a modular framework that emulates the distributed inference process for Transformer models. Built with a discrete-event simulation core, it models key aspects such as:
 
-- Different deployment scenarios (edge clusters, distributed edge, hybrid cloud-edge)
-- Resource-aware component distribution
-- Network topology and bandwidth modeling  
-- Performance metrics collection and analysis
+- **Device Resource Management:** Models compute devices with specified memory and compute capacities, and tracks resource allocation.
+- **Transformer Model Simulation:** Implements components like attention heads, projection layers, and feed-forward networks; estimates memory requirements and computational costs.
+- **Event-Driven Simulation:** Utilizes an event queue to schedule and process events (compute, transfer, generation steps, cache updates) in chronological order.
+- **Execution Scheduling:** Includes a scheduler that creates execution plans, resolves component dependencies, and manages inter-device transfers.
+- **Metrics Collection:** Gathers detailed performance, resource, and communication metrics for analysis.
+- **Algorithmic Experimentation:** Supports multiple strategies for distributing inference workloads, including baseline, edge sharding, galaxy-inspired, and resource-aware algorithms.
 
-## Features
+---
 
-- **Multiple Deployment Scenarios**
-  - Edge cluster (8 devices)
-  - Distributed edge (16 devices)  
-  - Hybrid cloud-edge (24 devices)
+## Key Features
 
-- **Resource Management**
-  - Memory tracking and allocation
-  - Compute capacity modeling
-  - Cache placement optimization
+- **Multiple Distribution Algorithms:**
+  - *Baselines:* Simple strategies serving as benchmarks.
+  - *Edge Sharding:* Techniques optimized for splitting workloads across edge devices.
+  - *Galaxy:* Hierarchical approaches for large-scale distributed inference.
+  - *Resource-Aware:* Dynamic allocation based on real-time resource availability.
+  
+- **Device and Resource Modeling:**
+  - **Device Class:** Represents a compute node with methods for resource allocation, deallocation, and tracking usage histories.
+  - **ResourceState:** Provides current availability and utilization percentages for memory and compute resources.
+  
+- **Discrete-Event Simulation:**
+  - **Event & EventQueue:** Defines events (e.g., compute start/complete, transfer start/complete, generation steps, cache updates) and ensures proper ordering.
+  - **Simulation Engine:** Processes events, manages simulation time, and enforces termination conditions (max steps, time limits).
+  
+- **Transformer Model Simulation:**
+  - **TransformerConfig:** Stores parameters such as number of attention heads, embedding dimension, initial sequence length, and precision.
+  - **Transformer Components:**
+    - *AttentionHead:* Computes memory requirements (for QKV matrices and cache), and FLOPs.
+    - *ProjectionLayer:* Handles outputs from attention heads.
+    - *FeedForwardNetwork (FFN):* Implements FFN computations with associated resource and FLOP estimates.
+  - **Transformer Class:** Aggregates components, manages sequence progression, and calculates total resource and computation demands.
+  
+- **Execution Scheduling:**
+  - **EventScheduler & ExecutionPlan:** Constructs execution plans per generation step, builds dependency graphs, schedules component computations, and manages cross-device transfers.
+  
+- **Metrics Collection and Analysis:**
+  - **PerformanceMetrics:** Tracks simulation time, generation step latencies, and compute/communication durations.
+  - **ResourceMetrics:** Monitors device resource utilizations, peaks, and idle times.
+  - **CommunicationMetrics:** Logs data transfers, migration counts, and link bandwidth usage.
+  - **MetricsCollector:** Aggregates metrics in real time, provides summary statistics, and supports exporting to JSON.
+  
+- **Utilities:**
+  - **Configuration Management:** Simplifies experiment setup via YAML files.
+  - **Logging:** Provides detailed logging for simulation events and resource updates.
+  - **Visualization:** Contains hooks for plotting metrics (to be extended as needed).
 
-- **Network Simulation**
-  - Configurable network topologies
-  - Bandwidth and latency modeling
-  - Communication overhead analysis
+---
 
-- **Performance Analysis**
-  - Latency measurement
-  - Resource utilization tracking
-  - Network metrics collection
-  - Visualization tools
+## Architecture and Project Structure
+
+transformer_inference_simulator/ 
+├── analysis/ # Analysis and plotting of simulation results 
+├── experiments/ # YAML configurations and experiment scripts 
+├── src/ 
+│   ├── algorithms/ # Distribution algorithms: 
+│   │   ├── baselines.py # Baseline distribution strategies 
+│   │   ├── edgeshard.py # Edge sharding for partitioning tasks 
+│   │   ├── galaxy.py # Hierarchical (galaxy-inspired) strategies 
+│   │   ├── resource_aware.py # Resource-aware scheduling algorithms 
+│   │   └── utils.py # Helper functions for algorithms 
+│   ├── core/ # Core simulation components: 
+│   │   ├── device.py # Device class & resource tracking 
+│   │   ├── event.py # Event definitions and ordering 
+│   │   ├── network.py # Network topology, bandwidth & latency modeling 
+│   │   └── transformer.py # Transformer model components and config 
+│   ├── simulation/ # Simulation engine and scheduling: 
+│   │   ├── engine.py # Main simulation engine (event loop) 
+│   │   ├── metrics.py # Metrics collection (performance, resource, communication) 
+│   │   └── scheduler.py # Execution scheduling and dependency resolution 
+│   └── utils/ # Utility modules: 
+│       ├── config.py # Experiment configuration utilities 
+│       ├── logging.py # Logging helper for simulation events 
+│       └── visualization.py # (Optional) routines for visualizing metrics 
+├── tests/ # Unit and integration tests for all modules 
+├── .gitignore 
+├── LICENSE 
+├── README.md # This file 
+├── requirements.txt # Python dependencies 
+├── run_experiments.py # Script to run simulation experiments 
+└── setup.py # Package setup script
+
+### Algorithms
+
+The `src/algorithms` directory provides various strategies to distribute Transformer inference tasks:
+- **baselines.py:** Implements basic distribution strategies.
+- **edgeshard.py:** Implements sharding techniques optimized for edge devices.
+- **galaxy.py:** Implements hierarchical distribution methods for large-scale inference.
+- **resource_aware.py:** Allocates tasks dynamically based on resource availability.
+- **utils.py:** Contains common helper functions.
+
+### Core Components
+
+- **Device (device.py):**  
+  Encapsulates a compute device with memory and compute capacities. It offers methods to:
+  - Check if resources can be accommodated.
+  - Allocate and deallocate resources (including cache).
+  - Maintain usage histories for analysis.
+
+- **Event System (event.py):**  
+  Defines an `Event` class and an `EventQueue` that together:
+  - Represent discrete events (e.g., compute, transfer, generation steps, cache updates).
+  - Order events by time and priority.
+  
+- **Transformer Model (transformer.py):**  
+  Defines the Transformer configuration and its components:
+  - **TransformerConfig:** Stores model parameters.
+  - **AttentionHead, ProjectionLayer, FeedForwardNetwork:** Calculate memory requirements and FLOPs.
+  - **Transformer Class:** Manages components and sequence progression.
+
+### Simulation Engine
+
+- **Engine (engine.py):**  
+  Drives the simulation by:
+  - Processing events from the `EventQueue`.
+  - Scheduling generation steps and component executions.
+  - Handling compute and transfer events.
+  - Checking termination conditions (max steps and time limits).
+  
+- **Metrics (metrics.py):**  
+  Collects detailed metrics including:
+  - Generation step latencies.
+  - Computation and transfer durations.
+  - Device resource utilization and network bandwidth usage.
+  
+- **Scheduler (scheduler.py):**  
+  Manages the execution plan for each generation step:
+  - Builds dependency graphs among Transformer components.
+  - Schedules computations and cross-device transfers.
+  - Estimates component completion times.
+
+### Utilities
+
+- **Configuration (config.py):** Manages experiment parameters.
+- **Logging (logging.py):** Provides structured logging for simulation events.
+- **Visualization (visualization.py):** Contains routines to plot metrics (extension point).
+
+---
 
 ## Complete Setup and Usage Guide
 
@@ -65,191 +201,71 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### 2. Running Tests
+### 2. Usage
 
-#### Run All Tests with Coverage
-```bash
-# Full test suite with coverage report
-pytest tests/ --cov=src --cov-report=html
-```
-
-#### Run Specific Test Categories
-```bash
-# Core components tests
-pytest tests/test_core/
-
-# Algorithm tests
-pytest tests/test_algorithms/
-
-# Environment tests
-pytest tests/test_environment/
-
-# Simulation tests
-pytest tests/test_simulation/
-
-# Utilities tests
-pytest tests/test_utils/
-```
-
-### 3. Running Experiments
-
-#### Baseline Comparisons
+#### Running Experiments
+##### Baseline Comparison:
 ```bash
 python run_experiments.py --config experiments/configs/baseline_comparison.yaml --output-dir results/baseline
 ```
-
-#### Edge Cluster Experiments
+##### Edge Cluster, Distributed Edge, Hybrid Cloud-Edge:
 ```bash
-python run_experiments.py \
-    --config experiments/configs/edge_cluster.yaml \
-    --output-dir results/edge_cluster
+python run_experiments.py --config experiments/configs/edge_cluster.yaml --output-dir results/edge_cluster
+python run_experiments.py --config experiments/configs/distributed_edge.yaml --output-dir results/distributed_edge
+python run_experiments.py --config experiments/configs/hybrid_cloud_edge.yaml --output-dir results/hybrid_cloud
 ```
+#### Simulation Workflow
+1. Initialization:
+The simulation engine initializes devices, loads the Transformer model, and schedules the first generation step.
 
-#### Distributed Edge Experiments
+2. Event Processing:
+The engine processes events in sequence (compute starts/completes, transfers, cache updates), advancing the simulation time accordingly.
+
+3. Execution Scheduling:
+The scheduler builds an execution plan for each generation step, resolves component dependencies, and schedules cross-device transfers if necessary.
+
+4. Metrics Collection:
+Throughout the simulation, detailed performance, resource, and communication metrics are collected for post-run analysis.
+
+#### Metrics and Analysis
+- Real-Time Metrics:
+The simulation engine uses the MetricsCollector to log:
+  - Step latencies.
+  - Computation and transfer durations.
+  - Device resource utilization and network bandwidth metrics.
+- Post-Simulation Summary:
+  - Generate and view a summary of metrics:
+  ```python
+  from simulation.metrics import MetricsCollector
+  metrics = MetricsCollector()
+  summary = metrics.get_summary()
+  print(summary)
+  ```
+
+### 3. Configuration
+
+Experiment parameters are defined in YAML files under experiments/configs/. Typical settings include:
+- Network Settings: Topology, device count, bandwidth, and latency.
+- Resource Specifications: Memory and compute capacities (with statistical parameters).
+- Workload Settings: Transformer model parameters (e.g., number of heads, embedding dimensions, sequence lengths).
+Customize these files to simulate various deployment scenarios and hardware constraints.
+
+### 4. Testing
+
+Run the full test suite to ensure proper functionality:
 ```bash
-python run_experiments.py \
-    --config experiments/configs/distributed_edge.yaml \
-    --output-dir results/distributed_edge
+pytest tests/ --cov=src --cov-report=html
 ```
-
-#### Hybrid Cloud-Edge Experiments
+To test specific modules, use commands such as:
 ```bash
-python run_experiments.py \
-    --config experiments/configs/hybrid_cloud_edge.yaml \
-    --output-dir results/hybrid_cloud
+pytest tests/test_core/
+pytest tests/test_simulation/
 ```
 
-### 4. Analyzing Results
+## Contact
 
-#### Analyze All Results
-```bash
-python -c "from analysis import analyze_results; analyze_results('results', 'analysis/plots')"
-```
+For questions, suggestions, or issues, please open an issue on GitHub or contact the maintainer at dimitrioskafetzis@gmail.com.
 
-#### Analyze Specific Scenarios
-```bash
-# Edge cluster analysis
-python -c "from analysis import analyze_results; analyze_results('results/edge_cluster', 'analysis/plots/edge_cluster')"
-
-# Distributed edge analysis
-python -c "from analysis import analyze_results; analyze_results('results/distributed_edge', 'analysis/plots/distributed_edge')"
-
-# Hybrid cloud analysis
-python -c "from analysis import analyze_results; analyze_results('results/hybrid_cloud', 'analysis/plots/hybrid_cloud')"
-```
-
-## Project Structure
-
-```
-transformer_inference_simulator/
-├── src/                     # Source code
-│   ├── algorithms/         # Distribution algorithms
-│   ├── core/              # Core components
-│   ├── environment/       # Simulation environment
-│   ├── simulation/        # Simulation engine
-│   └── utils/             # Utilities
-├── experiments/            # Experiment configurations
-│   ├── configs/           # YAML configuration files
-│   ├── scenarios/         # Scenario implementations
-│   └── results/           # Experiment results
-├── analysis/              # Analysis tools
-│   ├── metrics/          # Metrics calculation
-│   ├── plotting/         # Visualization
-│   └── utils/            # Analysis utilities
-└── tests/                 # Test suite
-```
-
-## Configuration
-
-Experiment configurations are defined in YAML files under `experiments/configs/`. Example configuration:
-
-```yaml
-network:
-  topology_type: "edge_cluster"
-  num_devices: 8
-  min_bandwidth: 1.0    # 1 Gbps
-  max_bandwidth: 10.0   # 10 Gbps
-
-resources:
-  memory_mu: 2.0
-  memory_sigma: 0.5
-  memory_min: 2.0    # 2GB RAM
-  memory_max: 16.0   # 16GB RAM
-  compute_mu: 5.0
-  compute_sigma: 0.5
-  compute_min: 10.0  # 10 GFLOPS
-  compute_max: 100.0 # 100 GFLOPS
-
-workload:
-  model_type: "SMALL"  # 8 attention heads, D=512
-  initial_sequence_lengths: [128, 256]
-  generation_steps: [32, 64]
-```
-
-## File Formats
-
-### Metrics File (.jsonl)
-The metrics are stored in JSONL (JSON Lines) format, where each line is a valid JSON object:
-```jsonl
-{"timestamp": "2024-03-01T10:00:00", "metrics": {"latency": 100, "memory_usage": 0.8}}
-{"timestamp": "2024-03-01T10:00:01", "metrics": {"latency": 105, "memory_usage": 0.85}}
-```
-
-To read metrics files:
-```python
-import pandas as pd
-metrics_df = pd.read_json('metrics.jsonl', lines=True)
-```
-
-## Troubleshooting
-
-### Common Issues and Solutions
-
-1. Virtual Environment Issues
-```bash
-# If venv creation fails, ensure you have python3-venv installed
-sudo apt-get install python3-venv  # On Ubuntu/Debian
-```
-
-2. Missing Dependencies
-```bash
-# If import errors occur, verify installation
-pip list
-pip install -r requirements.txt --force-reinstall
-```
-
-3. Permission Issues
-```bash
-# If permission denied when creating directories
-chmod +x run_experiments.py
-sudo chown -R $USER:$USER results/
-```
-
-### Viewing Results
-
-Check the log files for detailed information:
-```bash
-# View latest logs
-tail -f results/*/logs/*.log
-```
-
-View the test coverage report:
-```bash
-# On macOS:
-open htmlcov/index.html
-# On Linux:
-xdg-open htmlcov/index.html
-# On Windows:
-start htmlcov/index.html
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
 
 ## License
 
