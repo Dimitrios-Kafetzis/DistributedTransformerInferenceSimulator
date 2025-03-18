@@ -44,9 +44,11 @@ The **Transformer Inference Simulator** is a modular framework that emulates the
 
 - **Multiple Distribution Algorithms:**
   - *Baselines:* Simple strategies serving as benchmarks.
-  - *Edge Sharding:* Techniques optimized for splitting workloads across edge devices.
-  - *Galaxy:* Hierarchical approaches for large-scale distributed inference.
-  - *Resource-Aware:* Dynamic allocation based on real-time resource availability.
+  - State of the Art algorithmic frameworks:
+    - *EdgeShard:* Techniques optimized for splitting workloads across edge devices. (https://arxiv.org/pdf/2405.14371)
+    - *Galaxy:* Hierarchical approaches for large-scale distributed inference. (https://arxiv.org/pdf/2405.17245)
+  - Our proposed algorithmic framework:
+    - *Resource-Aware:* Dynamic allocation based on real-time resource availability.
   
 - **Device and Resource Modeling:**
   - **Device Class:** Represents a compute node with methods for resource allocation, deallocation, and tracking usage histories.
@@ -81,8 +83,8 @@ The **Transformer Inference Simulator** is a modular framework that emulates the
 ---
 
 ## Architecture and Project Structure
-
-transformer_inference_simulator/ 
+```
+transformer_inference_simulator/
 ├── analysis/ # Analysis and plotting of simulation results 
 ├── experiments/ # YAML configurations and experiment scripts 
 ├── src/ 
@@ -112,6 +114,7 @@ transformer_inference_simulator/
 ├── requirements.txt # Python dependencies 
 ├── run_experiments.py # Script to run simulation experiments 
 └── setup.py # Package setup script
+```
 
 ### Algorithms
 
