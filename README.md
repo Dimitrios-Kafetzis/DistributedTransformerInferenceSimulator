@@ -265,9 +265,9 @@ pytest tests/test_core/
 pytest tests/test_simulation/
 ```
 
-## Contact
+## Author & Contact
 
-For questions, suggestions, or issues, please open an issue on GitHub or contact the maintainer at dimitrioskafetzis@gmail.com.
+For questions, suggestions, or issues, please open an issue on GitHub or contact the maintainer and author (Dimitrios Kafetzis) at dimitrioskafetzis@gmail.com or kafetzis@aueb.gr.
 
 
 ## License
