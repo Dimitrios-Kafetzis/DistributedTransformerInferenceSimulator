@@ -10,17 +10,19 @@
 # Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
 # File: analysis/metrics/statistics.py
 # Description:
-#   Statistical methods and significance tests for evaluating
-#   distributed Transformer inference experiments and comparing
-#   different algorithmic approaches.
+#   Statistical methods and significance tests for evaluating distributed Transformer 
+#   inference experiments and comparing different algorithmic approaches.
 #
 # ---------------------------------------------------------------------------
 
 """
 Provides statistical functions and significance tests such as ANOVA, Kruskal-Wallis,
-Tukey's HSD, and confidence interval calculations. These utilities are used to
-analyze and validate results from the simulation and compare metrics across
-various distribution algorithms and settings.
+Tukey's HSD, and confidence interval calculations. These utilities are used to analyze
+and validate results from the simulation and compare metrics across various distribution
+algorithms and settings.
+
+Each function is designed to help users understand whether differences between experimental
+results are statistically significant and to provide confidence intervals for the measured metrics.
 """
 
 from typing import Dict, List, Optional, Tuple, Union
@@ -35,21 +37,28 @@ def calculate_statistics(data: Dict) -> Dict:
     """
     Calculate comprehensive statistical metrics for experimental results.
     
+    This function aggregates various statistical analyses (significance tests,
+    confidence interval calculations, and distribution analysis) into one summary
+    dictionary. It is used to assess the performance differences between different
+    Transformer inference algorithms.
+    
     Args:
-        data: Dictionary containing experimental measurements
+        data: Dictionary containing experimental measurements. It must include keys like
+              'algorithm_results', 'metrics', and 'complex_metrics' that hold the experimental data.
         
     Returns:
-        Dictionary containing statistical analysis results
+        Dictionary containing statistical analysis results for significance tests, 
+        confidence intervals, and distribution analysis.
     """
     stats_results = {}
     
-    # Perform significance tests
+    # Perform significance tests to compare different algorithmic approaches.
     stats_results['significance'] = perform_significance_tests(data)
     
-    # Calculate confidence intervals
+    # Calculate confidence intervals for the measured metrics.
     stats_results['confidence_intervals'] = calculate_confidence_intervals(data)
     
-    # Analyze distributions
+    # Analyze the statistical distributions of the results.
     stats_results['distributions'] = analyze_distributions(data)
     
     return stats_results
@@ -58,25 +67,35 @@ def perform_significance_tests(data: Dict) -> Dict:
     """
     Perform statistical significance tests between algorithms.
     
+    This function compares the results from different algorithms using:
+      - Pairwise t-tests: Tests whether the means of two independent samples differ significantly.
+      - ANOVA (Analysis of Variance): Determines whether there are any statistically significant differences
+        between the means of three or more independent (unrelated) groups.
+      - Kruskal-Wallis H-test: A non-parametric method for testing whether samples originate from the same distribution.
+    
+    These tests help determine if the differences observed in experimental results are likely due
+    to chance or reflect true differences in performance.
+    
     Args:
-        data: Dictionary containing experimental measurements
+        data: Dictionary containing experimental measurements, including a key 'algorithm_results'
+              which is a dictionary mapping algorithm names to their result arrays.
         
     Returns:
-        Dictionary containing significance test results
+        Dictionary containing significance test results for pairwise comparisons, ANOVA, and Kruskal-Wallis tests.
     """
     significance_results = {}
     
-    # Perform pairwise tests between algorithms
+    # Perform pairwise statistical tests between each pair of algorithms.
     significance_results['pairwise'] = perform_pairwise_tests(
         data['algorithm_results']
     )
     
-    # Perform ANOVA tests
+    # Perform ANOVA tests to determine if at least one algorithm's mean result is different.
     significance_results['anova'] = perform_anova_tests(
         data['algorithm_results']
     )
     
-    # Perform Kruskal-Wallis tests for non-normal distributions
+    # Perform Kruskal-Wallis tests for cases where data does not follow a normal distribution.
     significance_results['kruskal'] = perform_kruskal_tests(
         data['algorithm_results']
     )
@@ -87,22 +106,29 @@ def calculate_confidence_intervals(data: Dict) -> Dict:
     """
     Calculate confidence intervals for various metrics.
     
+    Confidence intervals provide a range within which the true metric value is likely to fall.
+    This function calculates CIs for simple metrics using t-distribution and also computes
+    bootstrap confidence intervals for complex metrics.
+    
     Args:
-        data: Dictionary containing experimental measurements
+        data: Dictionary containing experimental measurements. Expected keys include 'metrics'
+              (a dictionary mapping metric names to algorithm measurement arrays) and 
+              'complex_metrics' for more advanced statistics.
         
     Returns:
-        Dictionary containing confidence intervals
+        Dictionary containing confidence intervals for each metric and bootstrap intervals
+        for complex metrics.
     """
     ci_results = {}
     
-    # Calculate CIs for each metric
+    # Calculate confidence intervals for each simple metric.
     for metric_name, metric_data in data['metrics'].items():
         ci_results[metric_name] = {
             algo: calculate_metric_ci(measurements)
             for algo, measurements in metric_data.items()
         }
         
-    # Calculate bootstrap CIs for complex metrics
+    # Calculate bootstrap confidence intervals for complex metrics.
     ci_results['bootstrap'] = calculate_bootstrap_intervals(
         data['complex_metrics']
     )
@@ -113,20 +139,24 @@ def analyze_distributions(data: Dict) -> Dict:
     """
     Analyze statistical distributions of experimental results.
     
+    This function checks the normality of the data and extracts key distribution characteristics
+    (mean, median, standard deviation, skewness, kurtosis, percentiles) for the results of each algorithm.
+    Such analysis is essential to choose the appropriate significance tests (e.g., parametric vs. non-parametric).
+    
     Args:
-        data: Dictionary containing experimental measurements
+        data: Dictionary containing experimental measurements, specifically 'algorithm_results'.
         
     Returns:
-        Dictionary containing distribution analysis
+        Dictionary containing results from normality tests and distribution characteristics.
     """
     distribution_results = {}
     
-    # Test for normality
+    # Test whether the results for each algorithm follow a normal distribution.
     distribution_results['normality'] = test_normality(
         data['algorithm_results']
     )
     
-    # Analyze distribution characteristics
+    # Analyze key characteristics of the distributions.
     distribution_results['characteristics'] = analyze_distribution_characteristics(
         data['algorithm_results']
     )
@@ -137,29 +167,35 @@ def perform_pairwise_tests(algorithm_results: Dict) -> Dict:
     """
     Perform pairwise statistical tests between algorithms.
     
+    For each unique pair of algorithms, this function performs a t-test to compare the means.
+    It also calculates Cohen's d effect size to quantify the difference. The result indicates
+    whether the differences between the two algorithms are statistically significant.
+    
     Args:
-        algorithm_results: Dictionary with results for each algorithm
+        algorithm_results: Dictionary with result arrays for each algorithm.
         
     Returns:
-        Dictionary containing pairwise test results
+        Dictionary containing t-statistics, p-values, effect sizes, and significance (p < 0.05)
+        for each algorithm pair.
     """
     pairwise_results = {}
     
-    # Get all algorithm pairs
+    # List all algorithm names
     algorithms = list(algorithm_results.keys())
     n_algorithms = len(algorithms)
     
+    # Compare each pair only once
     for i in range(n_algorithms):
         for j in range(i + 1, n_algorithms):
             algo1, algo2 = algorithms[i], algorithms[j]
             
-            # Perform t-test
+            # Perform independent t-test between the two algorithm result sets.
             t_stat, p_value = stats.ttest_ind(
                 algorithm_results[algo1],
                 algorithm_results[algo2]
             )
             
-            # Calculate effect size (Cohen's d)
+            # Calculate effect size (Cohen's d) to understand the magnitude of difference.
             effect_size = calculate_cohens_d(
                 algorithm_results[algo1],
                 algorithm_results[algo2]
@@ -178,19 +214,25 @@ def perform_anova_tests(algorithm_results: Dict) -> Dict:
     """
     Perform ANOVA tests across algorithms.
     
+    Analysis of Variance (ANOVA) is used to determine whether there are statistically significant 
+    differences between the means of three or more independent groups. This function first performs 
+    a one-way ANOVA test and then uses Tukey's Honest Significant Difference (HSD) test to perform
+    pairwise comparisons between group means.
+    
     Args:
-        algorithm_results: Dictionary with results for each algorithm
+        algorithm_results: Dictionary with result arrays for each algorithm.
         
     Returns:
-        Dictionary containing ANOVA results
+        Dictionary containing the ANOVA F-statistic, p-value, a flag for significance (p < 0.05),
+        and the results from Tukey's HSD test including statistics, p-values, and rejection flags.
     """
-    # Prepare data for ANOVA
+    # Prepare groups for the ANOVA test.
     groups = [results for results in algorithm_results.values()]
     
-    # Perform one-way ANOVA
+    # One-way ANOVA to test if any group mean is significantly different.
     f_stat, p_value = stats.f_oneway(*groups)
     
-    # Perform Tukey's HSD test for multiple comparisons
+    # Prepare data for Tukey's HSD for multiple comparisons.
     data = []
     labels = []
     for algo, results in algorithm_results.items():
@@ -214,16 +256,20 @@ def perform_kruskal_tests(algorithm_results: Dict) -> Dict:
     """
     Perform Kruskal-Wallis H-tests for non-normal distributions.
     
+    The Kruskal-Wallis H-test is a non-parametric method used when the assumption of normality
+    is violated. It tests whether samples originate from the same distribution. This function
+    is useful when experimental results do not follow a normal distribution.
+    
     Args:
-        algorithm_results: Dictionary with results for each algorithm
+        algorithm_results: Dictionary with result arrays for each algorithm.
         
     Returns:
-        Dictionary containing Kruskal-Wallis test results
+        Dictionary containing the Kruskal-Wallis H statistic, p-value, and a significance flag.
     """
-    # Prepare data for Kruskal-Wallis test
+    # Prepare groups for the test.
     groups = [results for results in algorithm_results.values()]
     
-    # Perform Kruskal-Wallis H-test
+    # Perform the non-parametric Kruskal-Wallis H-test.
     h_stat, p_value = stats.kruskal(*groups)
     
     return {
@@ -237,14 +283,19 @@ def calculate_metric_ci(
     confidence_level: float = 0.95
 ) -> Dict:
     """
-    Calculate confidence interval for a metric.
+    Calculate confidence interval for a metric using the t-distribution.
+    
+    Confidence intervals provide a range in which the true mean of the measurements is likely
+    to fall. This function calculates the mean, standard error, and the lower and upper bounds
+    of the confidence interval.
     
     Args:
-        measurements: Array of metric measurements
-        confidence_level: Confidence level (default: 0.95)
+        measurements: Array of metric measurements.
+        confidence_level: Confidence level for the interval (default: 0.95).
         
     Returns:
-        Dictionary containing confidence interval information
+        Dictionary with the mean, standard error, lower and upper bounds of the confidence interval,
+        and the confidence level.
     """
     mean = np.mean(measurements)
     std_err = stats.sem(measurements)
@@ -272,28 +323,33 @@ def calculate_bootstrap_intervals(
     """
     Calculate bootstrap confidence intervals for complex metrics.
     
+    Bootstrap methods repeatedly resample the data with replacement to estimate the
+    sampling distribution. This function computes the mean for each bootstrap sample
+    and then derives the confidence interval from the percentile distribution of these means.
+    
     Args:
-        metric_data: Dictionary containing metric data
-        n_bootstrap: Number of bootstrap samples
-        confidence_level: Confidence level
+        metric_data: Dictionary containing metric data (each key maps to an array of measurements).
+        n_bootstrap: Number of bootstrap samples (default: 10,000).
+        confidence_level: Confidence level for the interval.
         
     Returns:
-        Dictionary containing bootstrap intervals
+        Dictionary containing, for each metric, the mean and the lower and upper bounds of the
+        bootstrap confidence interval.
     """
     bootstrap_results = {}
     
     for metric_name, values in metric_data.items():
-        # Perform bootstrap sampling
+        # Generate bootstrap samples
         bootstrap_samples = np.random.choice(
             values,
             size=(n_bootstrap, len(values)),
             replace=True
         )
         
-        # Calculate statistic for each bootstrap sample
+        # Compute the mean for each bootstrap sample
         bootstrap_stats = np.mean(bootstrap_samples, axis=1)
         
-        # Calculate confidence intervals
+        # Calculate the confidence interval based on the percentiles
         ci_lower = np.percentile(
             bootstrap_stats,
             (1 - confidence_level) / 2 * 100
@@ -314,41 +370,51 @@ def calculate_bootstrap_intervals(
 
 def test_normality(algorithm_results: Dict) -> Dict:
     """
-    Test normality of distributions for each algorithm.
+    Test for normality of distributions for each algorithm.
+    
+    This function uses the Shapiro-Wilk test, which is a widely used method for testing the 
+    null hypothesis that the data was drawn from a normal distribution. In addition, it computes
+    the correlation coefficient of the Q-Q plot (quantile-quantile plot) as a supplementary measure.
     
     Args:
-        algorithm_results: Dictionary with results for each algorithm
+        algorithm_results: Dictionary with result arrays for each algorithm.
         
     Returns:
-        Dictionary containing normality test results
+        Dictionary containing the Shapiro-Wilk test statistic, p-value, Q-Q plot correlation,
+        and a boolean flag indicating if the data is considered normally distributed (p >= 0.05).
     """
     normality_results = {}
     
     for algo, results in algorithm_results.items():
-        # Shapiro-Wilk test
+        # Perform the Shapiro-Wilk test for normality.
         w_stat, p_value = stats.shapiro(results)
         
-        # Q-Q plot correlation
+        # Calculate the correlation coefficient for the Q-Q plot.
         qq_correlation = calculate_qq_correlation(results)
         
         normality_results[algo] = {
             'shapiro_statistic': w_stat,
             'shapiro_p_value': p_value,
             'qq_correlation': qq_correlation,
-            'is_normal': p_value >= 0.05
+            'is_normal': p_value >= 0.05  # Conventionally, p >= 0.05 means normality cannot be rejected.
         }
         
     return normality_results
 
 def analyze_distribution_characteristics(algorithm_results: Dict) -> Dict:
     """
-    Analyze characteristics of result distributions.
+    Analyze key characteristics of the result distributions.
+    
+    This function calculates central tendency and dispersion metrics, including mean, median,
+    standard deviation, skewness (asymmetry), kurtosis (tailedness), and selected percentiles.
+    These statistics help in understanding the overall shape and variability of the data,
+    which is important when selecting the appropriate statistical tests.
     
     Args:
-        algorithm_results: Dictionary with results for each algorithm
+        algorithm_results: Dictionary with result arrays for each algorithm.
         
     Returns:
-        Dictionary containing distribution characteristics
+        Dictionary with calculated statistics for each algorithm.
     """
     characteristics = {}
     
@@ -371,17 +437,41 @@ def analyze_distribution_characteristics(algorithm_results: Dict) -> Dict:
 
 # Helper functions
 def calculate_cohens_d(group1: np.ndarray, group2: np.ndarray) -> float:
-    """Calculate Cohen's d effect size"""
+    """
+    Calculate Cohen's d effect size for two groups.
+    
+    Cohen's d is a measure of the difference between two means in terms of standard deviation,
+    and it quantifies the effect size. A larger absolute value indicates a larger difference.
+    
+    Args:
+        group1: First group of measurements.
+        group2: Second group of measurements.
+        
+    Returns:
+        The Cohen's d value.
+    """
     n1, n2 = len(group1), len(group2)
     var1, var2 = np.var(group1, ddof=1), np.var(group2, ddof=1)
     
-    # Pooled standard deviation
+    # Compute the pooled standard deviation.
     pooled_std = np.sqrt(((n1 - 1) * var1 + (n2 - 1) * var2) / (n1 + n2 - 2))
     
     return (np.mean(group1) - np.mean(group2)) / pooled_std
 
 def calculate_qq_correlation(data: np.ndarray) -> float:
-    """Calculate correlation coefficient for Q-Q plot"""
+    """
+    Calculate the correlation coefficient for a Q-Q plot.
+    
+    A Q-Q (quantile-quantile) plot compares the quantiles of the data against the quantiles of a 
+    theoretical normal distribution. The Pearson correlation coefficient between the sorted data
+    and the theoretical quantiles serves as an indicator of normality.
+    
+    Args:
+        data: Array of measurements.
+        
+    Returns:
+        The Pearson correlation coefficient between the data and the theoretical normal quantiles.
+    """
     sorted_data = np.sort(data)
     theoretical_quantiles = stats.norm.ppf(
         np.linspace(0.5/len(data), 1 - 0.5/len(data), len(data))
