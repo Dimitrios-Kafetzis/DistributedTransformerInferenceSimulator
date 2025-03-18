@@ -134,7 +134,8 @@ def run_toy_experiments(output_dir: Path, logger: SimulationLogger) -> dict:
 
 def run_toy_comparison_experiments(output_dir: Path, logger: SimulationLogger) -> dict:
     """
-    Run the 'ToyComparisonScenario' which compares Baseline vs Resource-Aware in a toy environment.
+    Run 'ToyComparisonScenario' which now also uses EdgeShard and Galaxy distributors
+    to compare with other baseline algorithms.
     """
     results = {}
     if not TOY_AVAILABLE:
@@ -143,15 +144,14 @@ def run_toy_comparison_experiments(output_dir: Path, logger: SimulationLogger) -
     
     logger.log_event("experiment", "Starting toy comparison scenario experiments")
 
-    # We can reuse the same toy_example.yaml or create a toy_comparison.yaml
+    # Example config path for toy comparison
     config_path = "experiments/configs/toy_comparison_48_devices_hybrid.yaml"
 
     scenario_dir = output_dir
     scenario_dir.mkdir(exist_ok=True)
 
-    logger.log_event("scenario", "Running ToyComparisonScenario (baselines vs. resource-aware)")
+    logger.log_event("scenario", "Running ToyComparisonScenario (baselines + resource-aware + edgeshard + galaxy)")
 
-    # 2) ToyComparisonScenario
     scenario_config = load_config(config_path)
     scenario = ToyComparisonScenario(
         config=scenario_config,
@@ -164,6 +164,7 @@ def run_toy_comparison_experiments(output_dir: Path, logger: SimulationLogger) -
     return results
 
 def run_toy_optimal_comparison_experiments(output_dir: Path, logger: SimulationLogger) -> dict:
+    # same approach, but uses ToyOptimalComparisonScenario (with edgeshard + galaxy + exact_opt)
     results = {}
     if not TOY_AVAILABLE:
         logger.log_event("experiment", "Toy scenarios not available - skipping toy_optimal scenario")
@@ -171,23 +172,21 @@ def run_toy_optimal_comparison_experiments(output_dir: Path, logger: SimulationL
 
     logger.log_event("experiment", "Starting toy optimal comparison scenario")
 
-    # Suppose we have a config file specifically for toy_optimal, e.g.:
     config_path = "experiments/configs/toy_optimal_comparison.yaml"
 
     scenario_dir = output_dir
     scenario_dir.mkdir(exist_ok=True)
 
-    logger.log_event("scenario", "Running ToyOptimalComparisonScenario (includes exact baseline)")
+    logger.log_event("scenario", "Running ToyOptimalComparisonScenario (includes exact_opt + edgeshard + galaxy)")
 
     scenario_config = load_config(config_path)
-    from experiments.scenarios.toy_comparison_scenarios import ToyOptimalComparisonScenario
     scenario = ToyOptimalComparisonScenario(
         config=scenario_config,
         output_dir=scenario_dir,
         logger=logger
     )
     sr = scenario.execute()
-    results["toy_comparison"] = scenario_result_to_dict(sr)
+    results["toy_optimal"] = scenario_result_to_dict(sr)
     return results
 
 def run_edge_cluster_experiments(output_dir: Path, logger: SimulationLogger) -> dict:

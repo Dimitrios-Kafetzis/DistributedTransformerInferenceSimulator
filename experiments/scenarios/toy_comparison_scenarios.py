@@ -13,7 +13,10 @@
 #   A small toy scenario that compares multiple baseline algorithms
 #   (Greedy, RoundRobin, Static, DynamicMigration) against ResourceAware,
 #   in a 3-device environment with random background usage and
-#   step-by-step communication & migration metrics. Includes also an ExactOptimal approach for small device counts.
+#   step-by-step communication & migration metrics. Also includes
+#   an ExactOptimal approach for small device counts.
+#
+# ---------------------------------------------------------------------------
 
 import random
 from datetime import datetime
@@ -29,7 +32,7 @@ from .common import (
 )
 from .baseline_scenarios import BaselineComparisonBaseScenario
 
-# 5 algorithms (including static, dynamic)
+# Import the existing algorithms
 from src.algorithms import (
     GreedyDistributor,
     RoundRobinDistributor,
@@ -38,6 +41,11 @@ from src.algorithms import (
     ResourceAwareDistributor,
     ExactOptimalDistributor
 )
+
+# NEW: import EdgeShard + Galaxy
+from src.algorithms.edgeshard import EdgeShardDistributor
+from src.algorithms.galaxy import GalaxyDistributor
+
 from src.core import Network, Device, Transformer
 from src.environment import (
     ResourceDistributor,
@@ -49,14 +57,14 @@ from src.utils import SimulationLogger, SimulationConfig, LogLevel
 
 class ToyComparisonScenario(BaselineComparisonBaseScenario):
     """
-    Compare all 5 algorithms (greedy, round_robin, static, dynamic, resource_aware)
-    in a small environment. Each step:
+    Compare multiple algorithms (Greedy, RoundRobin, Static, DynamicMigration,
+    ResourceAware, EdgeShard, Galaxy) in a small environment with
+    3 devices. Each step:
       1) Reset device usage to reflect only persistent allocations
       2) Add random background usage
       3) For each algorithm, compute_assignment(...)
       4) Collect resource usage, communication overhead, migrations, latency
-      5) Also store distribution info
-      6) Aggregate results => final summary
+      5) Aggregate results => final summary
     """
 
     def setup(self) -> None:
@@ -81,7 +89,7 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
         if not validate_scenario_requirements(self.config, self.network, self.devices, test_transformer):
             raise ValueError("Scenario requirements not met in ToyComparisonScenario setup")
 
-        # 4) Instantiate all 5
+        # 4) Instantiate baseline + resource-aware + new algorithms
         self.greedy = GreedyDistributor(test_transformer, self.network, self.devices, self.logger)
         self.round_robin = RoundRobinDistributor(test_transformer, self.network, self.devices, self.logger)
         self.static = StaticDistributor(test_transformer, self.network, self.devices, self.logger)
@@ -93,17 +101,33 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
             compute_threshold=self.config.algorithm.migration_threshold,
             logger=self.logger
         )
-        #self.resource_aware = ResourceAwareDistributor(test_transformer, self.network, self.devices, self.logger)
         self.resource_aware = ResourceAwareDistributor(
             transformer=test_transformer,
             network=self.network,
             devices=self.devices,
             logger=self.logger,
             use_weighted_sum=True,     # pick weighted sum
-            alpha=0.5,                 # example weighting
+            alpha=0.5,
             beta=0.3,
             gamma=0.2,
-            use_partial_latency_check=False  # enable the mini-latency concurrency check
+            use_partial_latency_check=False
+        )
+
+        # NEW: EdgeShard & Galaxy
+        self.edgeshard = EdgeShardDistributor(
+            transformer=test_transformer,
+            network=self.network,
+            devices=self.devices,
+            logger=self.logger,
+            num_shards=2  # just an example
+        )
+        self.galaxy = GalaxyDistributor(
+            transformer=test_transformer,
+            network=self.network,
+            devices=self.devices,
+            logger=self.logger,
+            num_stages=2,           # pipeline shards
+            devices_per_stage=2     # how many devices per shard group
         )
 
         self.algorithms = {
@@ -112,6 +136,8 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
             "static": self.static,
             "dynamic": self.dynamic,
             "resource_aware": self.resource_aware,
+            "edgeshard": self.edgeshard,    # new
+            "galaxy": self.galaxy          # new
         }
 
         if self.logger:
@@ -180,10 +206,8 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
         migration_metrics = defaultdict(dict)
         performance_metrics = defaultdict(dict)
 
-        # Store distribution info (which device each block + cache is on)
-        distribution_metrics = defaultdict(dict)  # step -> {algo: {"components": {}, "caches": {}}}
+        distribution_metrics = defaultdict(dict)  # step -> {algo: {components, caches}}
 
-        # comparison metrics
         comparison_metrics = {
             "latency": defaultdict(list),
             "resource_utilization": defaultdict(list),
@@ -205,7 +229,7 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
                 if self.logger:
                     self.logger.log_event("debug", f"=== Step {step} start ===", level=LogLevel.DEBUG)
 
-                # 1) Reset usage to only persistent usage, then 2) add random usage
+                # 1) reset usage to only persistent usage, then add random usage
                 self._inject_random_background_usage()
 
                 for algo_name, distributor in self.algorithms.items():
@@ -236,12 +260,11 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
                         comm_time = result.communication_time
                         data_tx = result.data_transferred_gb
 
-                        # store distribution info
                         distribution_metrics[step].setdefault(algo_name, {})
                         distribution_metrics[step][algo_name]["components"] = dict(result.component_assignments)
                         distribution_metrics[step][algo_name]["caches"] = dict(result.cache_assignments)
 
-                        # update prev
+                        # store prev
                         prev_assignments[algo_name] = result.component_assignments
                         prev_cache[algo_name] = result.cache_assignments
 
@@ -254,7 +277,6 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
                                 level=LogLevel.DEBUG
                             )
 
-                    # Store per-step metrics
                     resource_metrics[step][algo_name] = usage_dict
                     communication_metrics[step].setdefault(algo_name, {})
                     communication_metrics[step][algo_name]["comm_time"] = comm_time
@@ -277,14 +299,6 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
                     comparison_metrics["resource_utilization"][algo_name].append(avg_util)
                     comparison_metrics["migration_counts"][algo_name] += migrations
                     comparison_metrics["communication_overhead"][algo_name].append(comm_time)
-
-                    if self.logger:
-                        self.logger.log_event(
-                            "debug",
-                            f"Step {step}, Algo='{algo_name}': avg_util={avg_util:.4f}, "
-                            f"migrations={migrations}, comm_time={comm_time:.4f}",
-                            level=LogLevel.DEBUG
-                        )
 
                 # optional log
                 if self.logger:
@@ -309,9 +323,6 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
                 else:
                     aggregates["average_latency"][algo_name] = float('inf')
                 aggregates["total_migrations"][algo_name] = total_migrations[algo_name]
-
-            if self.logger:
-                self.logger.log_event("debug", "Aggregates => " + pp.pformat(aggregates), level=LogLevel.DEBUG)
 
             final_resource = dict(resource_metrics)
             final_communication = dict(communication_metrics)
@@ -351,13 +362,6 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
                         total_data_for_algo[algo] += data_val
             scenario_metrics["summary"]["total_data_transferred_each_algo"] = total_data_for_algo
 
-            if self.logger:
-                self.logger.log_event(
-                    "debug",
-                    "Final scenario_metrics => \n" + pp.pformat(scenario_metrics),
-                    level=LogLevel.DEBUG
-                )
-
             return ScenarioResult(
                 scenario_name=self.__class__.__name__,
                 start_time=datetime.now(),
@@ -382,22 +386,17 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
         """
         Reset each device's used memory/compute to reflect only persistent usage,
         then add random usage for this step.
-
-        We rely on assigned_components[...] storing 'memory' and 'compute' keys for usage.
         """
         for dev_id, device in self.devices.items():
-            # 1) Sum up usage from currently assigned components 
-            #    (any ephemeral ones presumably have been removed by the distributors).
+            # 1) Sum persistent usage only
             persistent_mem = 0.0
             persistent_comp = 0.0
             for comp_id, comp_info in device.assigned_components.items():
-                # comp_info = {"memory": <float>, "compute": <float>, "ephemeral": <bool>}
                 mem_req = float(comp_info["memory"])
                 comp_req = float(comp_info["compute"])
                 persistent_mem += mem_req
                 persistent_comp += comp_req
 
-            # Set usage to the persistent-only total
             device.memory.used = min(persistent_mem, device.memory.capacity)
             device.compute.used = min(persistent_comp, device.compute.capacity)
 
@@ -407,17 +406,6 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
 
             device.memory.used = min(device.memory.used + mem_bg, device.memory.capacity)
             device.compute.used = min(device.compute.used + comp_bg, device.compute.capacity)
-
-            if self.logger:
-                self.logger.log_event(
-                    "bg_usage_injection",
-                    (
-                        f"Device={dev_id}: persistent_mem={persistent_mem:.4f}, persistent_comp={persistent_comp:.4f}, "
-                        f"+mem_bg={mem_bg:.4f}, +comp_bg={comp_bg:.4f} => final mem_used={device.memory.used:.4f}, "
-                        f"comp_used={device.compute.used:.4f}"
-                    ),
-                    level=LogLevel.DEBUG
-                )
 
     def _collect_current_device_usage(self) -> Dict[str, Dict[str, float]]:
         usage = {}
@@ -441,14 +429,12 @@ class ToyComparisonScenario(BaselineComparisonBaseScenario):
             self.logger.log_event("cleanup", "Cleaning up ToyComparisonScenario")
         super().cleanup()
 
+
 class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
     """
-    Similar to ToyComparisonScenario, but includes the EXACT approach
+    Similar to ToyComparisonScenario, but also includes the EXACT approach
     for small device counts to measure how close we get to the optimal.
-
-    We'll forcibly limit to 2 or 3 devices so that the enumerations remain feasible.
-    We'll define a small model with e.g. 2 heads, smaller dims, so that the brute force
-    doesn't blow up in runtime.
+    We now also add EdgeShard and Galaxy for completeness.
     """
 
     def setup(self) -> None:
@@ -497,9 +483,25 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
             gamma=0.4,
             use_partial_latency_check=False
         )
-        # the new exact approach:
         self.exact_optimal = ExactOptimalDistributor(
             test_transformer, self.network, self.devices, self.logger
+        )
+
+        # NEW: Also add EdgeShard + Galaxy
+        self.edgeshard = EdgeShardDistributor(
+            transformer=test_transformer,
+            network=self.network,
+            devices=self.devices,
+            logger=self.logger,
+            num_shards=2
+        )
+        self.galaxy = GalaxyDistributor(
+            transformer=test_transformer,
+            network=self.network,
+            devices=self.devices,
+            logger=self.logger,
+            num_stages=2,
+            devices_per_stage=2
         )
 
         self.algorithms = {
@@ -508,19 +510,23 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
             "static": self.static,
             "dynamic": self.dynamic,
             "resource_aware": self.resource_aware,
+            "edgeshard": self.edgeshard,
+            "galaxy": self.galaxy,
             "exact_optimal": self.exact_optimal,
         }
 
         if self.logger:
-            self.logger.log_event("setup", f"Setup complete with {len(self.devices)} devices for ToyOptimalComparisonScenario", level=LogLevel.DEBUG)
-
+            self.logger.log_event(
+                "setup",
+                f"Setup complete with {len(self.devices)} devices for ToyOptimalComparisonScenario",
+                level=LogLevel.DEBUG
+            )
 
     def _create_network_and_devices(self):
         """
-        We'll fix e.g. 2 or 3 devices in the config. We'll follow the same approach as you do in the toy scenario:
-        - random bandwidth in [0.1..0.5] or so
-        - lognormal distribution for memory/compute
+        We'll fix e.g. 2 or 3 devices in the config. We'll follow the same approach as in toy scenario.
         """
+        import random
         mem_dist = LogNormalDistribution(
             mu=self.config.resources.memory_mu,
             sigma=self.config.resources.memory_sigma,
@@ -563,13 +569,7 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
                 )
                 self.network.add_link(dev_keys[i], dev_keys[j], bandwidth=bw)
 
-
     def run(self) -> ScenarioResult:
-        """
-        We'll do a similar multi-step run with random background usage,
-        collecting latency, etc. But the key is we also see the 'exact_optimal' result
-        and can measure the difference.
-        """
         from collections import defaultdict
         self.logger.log_event("run", "ToyOptimalComparisonScenario starts", level=LogLevel.DEBUG)
 
@@ -592,7 +592,6 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
             "migrations": defaultdict(int),
         }
 
-        # keep track of aggregator
         total_latency = {a: 0.0 for a in self.algorithms}
         feasible_counts = {a: 0 for a in self.algorithms}
 
@@ -617,7 +616,6 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
                         total_latency[algo_name] += result.estimated_latency
                         feasible_counts[algo_name] += 1
 
-                    # store
                     prev_assignments[algo_name] = result.component_assignments
                     prev_cache[algo_name] = result.cache_assignments
 
@@ -641,7 +639,6 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
         final_performance = dict(performance_metrics)
         final_migrations = dict(migration_metrics)
 
-        from experiments.scenarios.common import collect_scenario_metrics
         scn_metrics = collect_scenario_metrics(
             resource_metrics=final_resource,
             communication_metrics=final_communication,
@@ -660,7 +657,6 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
             aggregates["success"][a] = feasible_counts[a]
 
         scn_metrics["summary"]["aggregates"] = aggregates
-        # also store the comparison dictionary
         scn_metrics["comparison_metrics"] = {
             "latency": {a: comparison["latency"][a] for a in self.algorithms},
             "avg_util": {a: comparison["avg_util"][a] for a in self.algorithms},
@@ -676,11 +672,9 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
         )
 
     def _inject_random_bg_usage(self):
-        """Similar to your existing approach, or simpler."""
+        """Similar to the approach in the other scenario."""
         for dev in self.devices.values():
             # remove ephemeral usage
-            ephemeral_memory = 0.0
-            ephemeral_compute = 0.0
             to_remove = []
             for cid, info in dev.assigned_components.items():
                 if info.get("ephemeral", True):
@@ -688,17 +682,15 @@ class ToyOptimalComparisonScenario(BaselineComparisonBaseScenario):
             for ccache, cinfo in dev.cache_assignments.items():
                 if cinfo.get("ephemeral", True):
                     to_remove.append(ccache)
-
             for c in to_remove:
                 dev.deallocate_resources(c, force=True)
 
             # now usage is only persistent
-            # add random
+            import random
             mem_bg = random.uniform(0.0, 0.2)*dev.memory.capacity
             comp_bg = random.uniform(0.0, 0.2)*dev.compute.capacity
             dev.memory.used = min(dev.memory.used + mem_bg, dev.memory.capacity)
             dev.compute.used = min(dev.compute.used + comp_bg, dev.compute.capacity)
-
 
     def cleanup(self) -> None:
         if self.logger:
