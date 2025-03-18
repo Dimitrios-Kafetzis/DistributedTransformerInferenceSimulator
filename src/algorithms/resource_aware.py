@@ -7,12 +7,30 @@
 # with the License. You may obtain a copy of the License at
 #   https://opensource.org/licenses/MIT
 #
-# Author:  Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
-# File:    src/algorithms/resource_aware.py
+# Author: Dimitrios Kafetzis (dimitrioskafetzis@gmail.com)
+# File: src/algorithms/resource_aware.py
 # Description:
-#   Provides the resource-aware distribution algorithm for transformer
-#   inference, incorporating memory, compute, and communication
-#   constraints to optimize component placements.
+#   This script implements the resource-aware distribution algorithm for
+#   transformer inference, as described in Section IV of the paper:
+#
+#       "Large Language Model Partitioning for Low-Latency Inference at the Edge"
+#
+#   The algorithm partitions the decoder blocks of a Transformer at the attention-head
+#   level (and associated K/V caches), along with the projection and feed-forward layers.
+#   It assigns each block to an edge device by computing a scoring function S(i, j, t)
+#   that combines memory, compute, and communication constraints. Two scoring modes are
+#   provided:
+#
+#     (1) "max" mode: S(i,j,t) = max { memory_ratio, compute_ratio, communication_ratio }.
+#     (2) "weighted_sum" mode: S(i,j,t) = alpha * compute_ratio + beta * memory_ratio + gamma * comm_ratio.
+#
+#   A block is deemed feasible on a device if S(i, j, t) <= 1, ensuring that memory and compute
+#   constraints are not violated, and communication overhead remains acceptable.
+#
+#   The algorithm is myopic (token-by-token) and reassigns blocks dynamically at each generation step,
+#   incorporating migration costs when a block is moved from one device to another. This implementation
+#   follows the pseudocode and description in the paper, where the objective is to minimize the total delay
+#   (inference delay plus migration delay) at each step while satisfying resource constraints.
 #
 # ---------------------------------------------------------------------------
 
@@ -20,6 +38,11 @@
 Contains the main ResourceAwareDistributor class and related data structures,
 implementing a multi-dimensional scoring function and constraints to achieve
 optimized distributed assignments for transformer inference.
+
+This module corresponds to the resource-aware algorithm described in the attached
+paper, which uses attention head-level partitioning for autoregressive LLM inference.
+The scoring function S(i, j, t) is used to decide the best device for each block,
+and the algorithm handles migrations and backtracking if necessary.
 """
 
 import traceback
@@ -34,9 +57,22 @@ from .utils import ResourceRequirements, CommunicationCost, validate_assignment,
 
 @dataclass
 class AssignmentResult:
-    """Results from the distribution algorithm."""
-    component_assignments: Dict[str, str]  # component_id -> device_id
-    cache_assignments: Dict[str, str]      # head_id -> device_id
+    """
+    Data structure representing the outcome of the resource-aware block assignment.
+
+    Attributes:
+        component_assignments: Mapping from Transformer component IDs to device IDs.
+        cache_assignments: Mapping from attention head IDs (or their caches) to device IDs.
+        estimated_latency: The estimated total latency (including compute, communication, and migration costs).
+        resource_usage: Snapshot of resource usage on devices after assignment.
+        is_feasible: Boolean flag indicating whether a feasible assignment was found.
+        error: Optional error message if assignment failed.
+        migrations: Optional list of migration tuples (from_device, to_device, component_id).
+        communication_time: Total communication time incurred.
+        data_transferred_gb: Total data transferred (in GB) due to inter-device communications.
+    """
+    component_assignments: Dict[str, str]
+    cache_assignments: Dict[str, str]
     estimated_latency: float
     resource_usage: Dict[str, Dict[str, float]]
     is_feasible: bool
@@ -45,16 +81,21 @@ class AssignmentResult:
     communication_time: float = 0.0
     data_transferred_gb: float = 0.0
 
-
 @dataclass
 class ScoringFunction:
     """
-    Implements the scoring function S(i,j,t). 
-    We have two modes:
-      (1) 'max' mode => returns max(compute_ratio, memory_ratio, comm_ratio)
-      (2) 'weighted_sum' mode => alpha * compute_ratio + beta * memory_ratio + gamma * comm_ratio.
+    Implements the scoring function S(i, j, t) for a given component i and candidate device j at generation step t.
+    
+    There are two modes for computing the score:
+      (1) 'max' mode: Returns max(compute_ratio, memory_ratio, comm_ratio).
+          This mode penalizes the device based on the worst-case resource bottleneck.
+      (2) 'weighted_sum' mode: Returns alpha * compute_ratio + beta * memory_ratio + gamma * comm_ratio.
+          This mode allows adjusting the relative importance of compute, memory, and communication constraints.
+    
+    The score is used to choose the best device for placing a Transformer component such that
+    the placement is resource-feasible (S(i, j, t) <= 1) and minimizes overall latency.
     """
-    use_weighted_sum: bool = False  # If True, do the weighted sum approach; otherwise do max(...)
+    use_weighted_sum: bool = False  # If True, use weighted sum; else, use max(...)
     alpha: float = 0.4
     beta: float = 0.3
     gamma: float = 0.3
@@ -70,16 +111,42 @@ class ScoringFunction:
         generation_step: int
     ) -> float:
         """
-        Returns infinity if infeasible or if we have a policy that forbids device for certain comps.
-        Otherwise:
-          - If use_weighted_sum=False => returns max(compute_ratio, memory_ratio, comm_ratio).
-          - If use_weighted_sum=True  => returns alpha*compute_ratio + beta*memory_ratio + gamma*comm_ratio.
+        Compute the scoring function S(i, j, t) for assigning the given component to the device.
+
+        Returns infinity if the assignment is infeasible or if a policy forbids placement
+        (e.g., non-input components on a source device). Otherwise, computes three ratios:
+          - Compute ratio: The ratio of the component's FLOPs to the device's compute capacity.
+          - Memory ratio: The ratio of the component's memory requirement (including cache if applicable)
+            to the device's memory capacity.
+          - Communication ratio: An estimate of the additional communication delay if the component is placed
+            on this device relative to its dependencies.
+          
+        Depending on the mode:
+          - If use_weighted_sum is False, returns the maximum of the three ratios.
+          - If True, returns a weighted sum using the parameters alpha, beta, and gamma.
+        
+        This scoring function corresponds to the formulation in the paper (see Section IV-A),
+        where the goal is to choose a device that minimizes the maximum load and communication cost.
+        
+        Args:
+            component: The Transformer component being assigned.
+            device: Candidate Device for assignment.
+            network: The network object for computing transfer times.
+            transformer: The transformer model with current configuration.
+            current_assignments: Existing mapping of components to devices.
+            cache_assignments: Existing cache assignments.
+            generation_step: Current generation step (token index).
+        
+        Returns:
+            A float score representing the cost of placing the component on the device.
+            Lower scores indicate better placement.
         """
-        # Example policy: skip device if it's a "source" device but comp not input/position
+        # Example policy: if the device is marked as a "source" device and the component is not an input or positional component,
+        # then we do not allow assignment (return infinity).
         if device.is_source and component.component_id not in ["input", "position"]:
             return float('inf')
 
-        # Gather the 3 ratio components
+        # Compute the three ratios
         compute_ratio = _compute_ratio(component, device, transformer)
         memory_ratio = _memory_ratio(component, device, transformer, generation_step)
         comm_ratio = _communication_ratio(
@@ -87,19 +154,31 @@ class ScoringFunction:
         )
 
         if not self.use_weighted_sum:
-            # Old approach
+            # In 'max' mode, we penalize the device based on the worst-case ratio.
             return max(compute_ratio, memory_ratio, comm_ratio)
         else:
-            # Weighted sum approach
+            # In weighted-sum mode, we combine the ratios linearly.
             return self.alpha * compute_ratio + self.beta * memory_ratio + self.gamma * comm_ratio
 
-
 def _compute_ratio(component: TransformerComponent, device: Device, transformer: Transformer) -> float:
+    """
+    Calculate the compute ratio: the fraction of device compute capacity required by the component.
+    
+    Uses the component's estimated FLOPs (from compute_flops) at the current sequence length.
+    Returns infinity if the device's compute capacity is zero.
+    
+    Args:
+        component: Transformer component.
+        device: Device under consideration.
+        transformer: Transformer model (to get current sequence length).
+        
+    Returns:
+        Compute ratio as a float.
+    """
     flops = component.compute_flops(transformer.current_sequence_length)
     if device.compute.capacity <= 0:
         return float('inf')
     return flops / device.compute.capacity
-
 
 def _memory_ratio(
     component: TransformerComponent,
@@ -107,13 +186,28 @@ def _memory_ratio(
     transformer: Transformer,
     generation_step: int
 ) -> float:
+    """
+    Calculate the memory ratio: the fraction of device memory required by the component.
+    
+    This function computes the memory needed for the component using compute_memory_requirements.
+    For components with a K/V cache (e.g., attention heads), it adds the cache memory requirement.
+    Returns infinity if the device's memory capacity is zero.
+    
+    Args:
+        component: Transformer component.
+        device: Device under consideration.
+        transformer: Transformer model.
+        generation_step: Current generation step (affects cache size).
+        
+    Returns:
+        Memory ratio as a float.
+    """
     memory_req = component.compute_memory_requirements(transformer.current_sequence_length)
     if hasattr(component, 'compute_cache_memory'):
         memory_req += component.compute_cache_memory(generation_step)
     if device.memory.capacity <= 0:
         return float('inf')
     return memory_req / device.memory.capacity
-
 
 def _communication_ratio(
     component: TransformerComponent,
@@ -123,6 +217,25 @@ def _communication_ratio(
     current_assignments: Dict[str, str],
     cache_assignments: Dict[str, str]
 ) -> float:
+    """
+    Estimate the communication ratio, which approximates the extra delay incurred due to transferring
+    data between devices when the component's dependencies are located on different devices.
+    
+    For each dependency (e.g., for 'projection' that depends on attention heads), if the dependency is assigned
+    to a different device than the current one, we estimate the transfer size and use the network's transfer
+    time calculation to sum a total communication cost.
+    
+    Args:
+        component: Transformer component.
+        device: Candidate device.
+        network: Network object to calculate transfer times.
+        transformer: Transformer model.
+        current_assignments: Current mapping of components to devices.
+        cache_assignments: Current cache assignments (if any).
+        
+    Returns:
+        Communication cost as a float (total estimated transfer time).
+    """
     total_comm_cost = 0.0
     deps = _get_dependencies_global(component.component_id, transformer)
     for dep_id in deps:
@@ -134,18 +247,43 @@ def _communication_ratio(
                 total_comm_cost += ttime
     return total_comm_cost
 
-
 def _get_dependencies_global(component_id: str, transformer: Transformer) -> Set[str]:
+    """
+    Determine the global dependencies for a given component.
+    
+    For example, the 'projection' block depends on all attention heads,
+    and the 'ffn' block depends on the 'projection' block.
+    
+    Args:
+        component_id: The ID of the component.
+        transformer: The transformer model.
+        
+    Returns:
+        A set of component IDs that the given component depends on.
+    """
     deps = set()
     if component_id == "projection":
-        # depends on all attention heads
+        # Projection depends on all attention heads.
         deps.update(h.component_id for h in transformer.attention_heads)
     elif component_id == "ffn":
         deps.add("projection")
     return deps
 
-
 def _estimate_transfer_size_global(source_id: str, target_id: str, transformer: Transformer) -> float:
+    """
+    Estimate the size of data to be transferred (in GB) between two components.
+    
+    The function uses the transformer's current sequence length and configuration parameters.
+    For example, transferring outputs from an attention head to the projection layer.
+    
+    Args:
+        source_id: ID of the source component.
+        target_id: ID of the target component.
+        transformer: Transformer model (to access current sequence length, head_dim, etc.).
+        
+    Returns:
+        Estimated transfer size in GB as a float.
+    """
     if source_id.startswith("head_") and target_id == "projection":
         return (transformer.current_sequence_length *
                 transformer.config.head_dim *
@@ -156,17 +294,25 @@ def _estimate_transfer_size_global(source_id: str, target_id: str, transformer: 
                 transformer.config.precision_bytes) / (1024**3)
     return 0.0
 
-
 class ResourceAwareDistributor:
     """
-    Resource-aware approach from Section IV. 
-    We free ephemeral components each step, preserving head_* or *_cache across steps.
-    
-    This class can do two new modifications:
-      1) Weighted sum vs. max(...) in the scoring function (ScoringFunction has a flag).
-      2) Optional mini-latency check in `_find_best_device`, enabled by `use_partial_latency_check`.
-    """
+    Implements the resource-aware distribution algorithm for LLM block assignment.
 
+    This class implements the myopic, token-by-token placement and migration procedure
+    described in Section IV of the paper "Large Language Model Partitioning for Low-Latency
+    Inference at the Edge". In this approach:
+      - Each Transformer block (e.g., an attention head and its K/V cache, projection, and FFN)
+        is assigned to a device by minimizing a score that combines memory, compute, and communication costs.
+      - The scoring function (see ScoringFunction) can be computed as the maximum of the three ratios
+        or as a weighted sum.
+      - Ephemeral components (those that can be freed every step) are deallocated at the start of each
+        generation step, while non-ephemeral components (e.g., attention heads with caches) persist.
+      - If a block's optimal assignment changes from the previous step, a migration cost is incurred.
+      - The algorithm includes mechanisms to resolve resource overloads and backtrack if constraints are violated.
+    
+    This method is designed to adapt to the dynamic nature of autoregressive LLM inference, where the
+    key-value caches grow with each generated token.
+    """
     def __init__(
         self,
         transformer: Transformer,
@@ -180,9 +326,16 @@ class ResourceAwareDistributor:
         use_partial_latency_check: bool = False
     ):
         """
-        :param use_weighted_sum: if True, do weighted sum in scoring; otherwise do max.
-        :param alpha, beta, gamma: weights if we do weighted sum
-        :param use_partial_latency_check: if True, we do a mini-latency simulation in `_find_best_device`.
+        Initialize the ResourceAwareDistributor.
+        
+        Args:
+            transformer: The Transformer model to be partitioned.
+            network: The network object used to compute transfer times.
+            devices: Dictionary of available devices.
+            logger: Optional logger for simulation events.
+            use_weighted_sum: If True, use the weighted sum approach in the scoring function.
+            alpha, beta, gamma: Weights for compute, memory, and communication ratios in weighted sum mode.
+            use_partial_latency_check: If True, perform a mini-latency simulation to further refine device selection.
         """
         self.transformer = transformer
         self.network = network
@@ -191,7 +344,7 @@ class ResourceAwareDistributor:
 
         self.use_partial_latency_check = use_partial_latency_check
 
-        # Build the scoring function object
+        # Initialize the scoring function with the given mode and weights.
         self.scoring = ScoringFunction(
             use_weighted_sum=use_weighted_sum,
             alpha=alpha,
@@ -205,7 +358,23 @@ class ResourceAwareDistributor:
         previous_assignments: Optional[Dict[str, str]] = None,
         previous_cache: Optional[Dict[str, str]] = None
     ) -> AssignmentResult:
-
+        """
+        Compute a new assignment for Transformer blocks at the current generation step.
+        
+        This method implements the core of the resource-aware distribution algorithm.
+        It follows these high-level steps:
+          1) Deallocate ephemeral components from the previous step.
+          2) Start with previous assignments if available.
+          3) Sort Transformer blocks by descending resource demand.
+          4) For each block, select the best device based on the scoring function.
+          5) Attempt to allocate the block (and its cache, if applicable) on the chosen device.
+          6) Validate the final assignment against all constraints.
+          7) Compute the overall latency and communication cost of the assignment.
+        
+        Returns:
+            An AssignmentResult object encapsulating the block-to-device mapping,
+            estimated latency, resource usage, and feasibility status.
+        """
         if self.logger:
             self.logger.log_event(
                 "resource_aware_compute",
@@ -213,14 +382,14 @@ class ResourceAwareDistributor:
                 level=LogLevel.DEBUG
             )
 
-        # 1) Deallocate ephemeral from previous step
+        # 1) Deallocate ephemeral components from previous step.
         self._reset_device_states_for_step()
 
-        # 2) Start from previous assignments or empty
+        # 2) Initialize assignments from previous step if available.
         assignments = {} if not previous_assignments else dict(previous_assignments)
         cache_assignments = {} if not previous_cache else dict(previous_cache)
 
-        # 3) Sort components by resource demand (descending)
+        # 3) Sort components by their resource demand (largest first).
         try:
             components = self._sort_by_resource_demand()
             if not components:
@@ -251,7 +420,7 @@ class ResourceAwareDistributor:
                 error=f"Sort error: {str(ex)}"
             )
 
-        # 4) Assign each component in order
+        # 4) Iterate over sorted components and assign each one.
         try:
             for component in components:
                 comp_id = component.component_id
@@ -261,14 +430,14 @@ class ResourceAwareDistributor:
                 if hasattr(component, 'compute_cache_memory'):
                     cache_req = component.compute_cache_memory(generation_step)
 
-                # ephemeral unless it's head_* or *_cache
+                # Mark component as ephemeral unless it is an attention head or a cache block.
                 ephemeral = not (comp_id.startswith("head_") or comp_id.endswith("_cache"))
 
                 best_device = self._find_best_device(
                     component, assignments, cache_assignments, generation_step
                 )
                 if not best_device:
-                    # No feasible device found
+                    # No feasible device was found for this component.
                     if self.logger:
                         self.logger.log_error(
                             "resource_aware_no_device",
@@ -283,14 +452,14 @@ class ResourceAwareDistributor:
                         error=f"No device for {comp_id}"
                     )
 
-                # Attempt allocation
+                # Attempt to allocate main resources and cache (if needed).
                 ok_main = best_device.allocate_resources(comp_id, mem_req, flops_req, ephemeral=ephemeral)
                 ok_cache = True
                 if cache_req > 0 and ok_main:
                     ok_cache = best_device.allocate_resources(f"{comp_id}_cache", cache_req, 0.0, ephemeral=ephemeral)
 
                 if not (ok_main and ok_cache):
-                    # revert partial success
+                    # Allocation failed; revert partial allocations.
                     if ok_main:
                         best_device.deallocate_resources(comp_id, force=True)
                     if ok_cache:
@@ -310,7 +479,7 @@ class ResourceAwareDistributor:
                         error=f"Alloc fail for {comp_id}"
                     )
 
-                # Record
+                # Record the assignment.
                 assignments[comp_id] = best_device.device_id
                 if cache_req > 0:
                     cache_assignments[comp_id] = best_device.device_id
@@ -330,7 +499,7 @@ class ResourceAwareDistributor:
                 error=f"Assign loop exception: {str(ex)}"
             )
 
-        # 5) Validate final assignment
+        # 5) Validate the final assignment to ensure all resource constraints are met.
         try:
             feasible = validate_assignment(
                 assignments,
@@ -368,7 +537,7 @@ class ResourceAwareDistributor:
                 error=f"Validation exception: {str(ex)}"
             )
 
-        # 6) If feasible => compute concurrency-based latency + comm
+        # 6) Compute the estimated total latency and communication time for the assignment.
         try:
             latency, comm_time, data_gb = self._compute_latency_and_comm(assignments, cache_assignments, generation_step)
             usage = self._get_resource_usage()
@@ -398,13 +567,15 @@ class ResourceAwareDistributor:
             )
 
     # ------------------------------------------------------------------------
-    # Implementation details
+    # Implementation details for helper methods.
     # ------------------------------------------------------------------------
 
     def _reset_device_states_for_step(self) -> None:
         """
-        Only deallocate ephemeral comps (projection, ffn, etc.). 
-        Keep non-ephemeral (heads, caches).
+        Deallocate ephemeral components from devices at the beginning of each generation step.
+        
+        Ephemeral components (those that can be reallocated at every step) are deallocated,
+        while non-ephemeral ones (e.g., attention heads with persistent caches) remain allocated.
         """
         for device in self.devices.values():
             comps_to_remove = []
@@ -427,7 +598,15 @@ class ResourceAwareDistributor:
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float, float]:
-        # concurrency-based total latency
+        """
+        Compute the total estimated latency and communication cost for the current assignment.
+        
+        Uses a concurrency-based latency model (e.g., compute_3phase_latency) and adds up
+        communication delays for transfers required between blocks located on different devices.
+        
+        Returns:
+            A tuple (total_latency, total_comm_time, total_data_transferred_gb).
+        """
         total_latency = compute_3phase_latency(
             self.transformer,
             self.devices,
@@ -436,7 +615,6 @@ class ResourceAwareDistributor:
             generation_step,
             concurrency_mode="sum"  # or "max"/"hybrid" if desired
         )
-        # Then sum up the data xfers
         comm_time, data_gb = self._compute_comm_stats_separately(assignments, cache_assignments, generation_step)
 
         if self.logger:
@@ -453,6 +631,15 @@ class ResourceAwareDistributor:
         cache_assignments: Dict[str, str],
         generation_step: int
     ) -> Tuple[float, float]:
+        """
+        Compute separate communication statistics: total communication time and total data transferred (in GB).
+        
+        For each component, if its dependencies are assigned to a different device,
+        the method sums the transfer time based on estimated transfer size and network bandwidth.
+        
+        Returns:
+            A tuple (total_comm_time, total_data_transferred_gb).
+        """
         total_comm_time = 0.0
         total_data_gb = 0.0
         try:
@@ -484,7 +671,13 @@ class ResourceAwareDistributor:
 
     def _sort_by_resource_demand(self) -> List[TransformerComponent]:
         """
-        Sort components by (memory + compute) usage, descending.
+        Sort Transformer components by their resource demand (memory and compute), in descending order.
+        
+        This sorting ensures that components with the highest demand are assigned first,
+        which is critical for avoiding overload and for effective resource balancing.
+        
+        Returns:
+            A list of TransformerComponent objects sorted by demand.
         """
         try:
             comps = self.transformer.get_all_components()
@@ -518,10 +711,23 @@ class ResourceAwareDistributor:
         generation_step: int
     ) -> Optional[Device]:
         """
-        For each feasible device, compute:
-          - ratio-based or weighted-sum score from ScoringFunction, 
-          - optionally a partial concurrency-based estimate,
-        and pick the device with the best (lowest) combined measure.
+        Find the best device for placing a given Transformer component.
+        
+        For each feasible device (i.e., one that can accommodate the component's memory and compute requirements),
+        the method computes a score using the scoring function defined earlier. Optionally, if use_partial_latency_check
+        is enabled, the method performs a mini-latency simulation by temporarily allocating the component to the device,
+        computing a concurrency-based latency estimate, and then reverting the allocation.
+        
+        The device with the lowest (best) score is selected.
+        
+        Args:
+            component: The Transformer component to be assigned.
+            assignments: Current component assignments mapping.
+            cache_assignments: Current cache assignments mapping.
+            generation_step: Current generation step.
+        
+        Returns:
+            The Device object with the best (lowest) computed score, or None if no feasible device is found.
         """
         best_score = float('inf')
         best_dev = None
@@ -539,7 +745,7 @@ class ResourceAwareDistributor:
             )
 
         for dev in self.devices.values():
-            # Quick feasibility
+            # Quick feasibility check based on available resources.
             if not dev.can_accommodate(mem_req, flops_req):
                 if self.logger:
                     self.logger.log_event(
@@ -549,49 +755,37 @@ class ResourceAwareDistributor:
                     )
                 continue
 
-            # 1) Ratio-based or weighted-sum scoring
+            # 1) Compute score using the resource-aware scoring function.
             ratio_score = self.scoring.compute(
                 component, dev, self.network, self.transformer,
                 assignments, cache_assignments, generation_step
             )
             if ratio_score == float('inf'):
-                # not feasible or policy skip
+                # Skip this device if it is deemed infeasible by policy.
                 continue
 
             if not self.use_partial_latency_check:
-                # simpler approach: just use the ratio_score
+                # Use the computed ratio score directly.
                 final_score = ratio_score
             else:
-                # 2) Do a local concurrency-based partial check
-                # Temporarily allocate this component to dev, measure concurrency latency
-                # Then revert it.
+                # 2) If enabled, perform a partial latency simulation:
+                # Temporarily allocate the component to the device to compute a concurrency-based latency estimate.
                 ephemeral = not (component.component_id.startswith("head_") or component.component_id.endswith("_cache"))
                 ok_main = dev.allocate_resources(component.component_id, mem_req, flops_req, ephemeral=ephemeral)
-                # no separate cache check here for partial approach; you can do it if needed
                 if not ok_main:
-                    # revert any partial
                     continue
 
-                # Record the assignment in a temporary dict
                 tmp_assignments = dict(assignments)
                 tmp_assignments[component.component_id] = dev.device_id
 
-                # Compute concurrency-based latency in a partial scenario
-                # We do not finalize or validate the entire assignment, 
-                # just measure approximate new latency with concurrency.
-                #   Possibly we do a partial 'compute_3phase_latency' with concurrency_mode, 
-                #   or do the entire existing + this one component assigned.
-                # For simplicity, let's do a partial approach:
+                # Compute approximate latency if this assignment is made.
                 lat_if_assigned, _, _ = self._compute_latency_and_comm(
                     tmp_assignments, cache_assignments, generation_step
                 )
 
-                # Revert
+                # Revert temporary allocation.
                 dev.deallocate_resources(component.component_id, force=True)
 
-                # Combine ratio_score with the partial concurrency measure (or use just concurrency)
-                # Here we take a simple approach: final_score = lat_if_assigned
-                # Or we can do some combination if desired.
                 final_score = lat_if_assigned
 
             if final_score < best_score:
@@ -607,9 +801,16 @@ class ResourceAwareDistributor:
         return best_dev
 
     # ------------------------------------------------------------------------
-    # Helper methods for dependencies and data size
+    # Helper methods for dependency and transfer size estimation.
     # ------------------------------------------------------------------------
+
     def _get_resource_usage(self) -> Dict[str, Dict[str, float]]:
+        """
+        Collect the current resource usage statistics for all devices.
+        
+        Returns:
+            A dictionary mapping device IDs to their resource usage details (memory used, compute used, etc.).
+        """
         usage = {}
         for dev_id, dev in self.devices.items():
             usage[dev_id] = {
@@ -628,7 +829,16 @@ class ResourceAwareDistributor:
 
     def __get_dependencies(self, comp_id: str) -> List[str]:
         """
-        e.g. 'projection' depends on heads, 'ffn' depends on 'projection'.
+        Get the local dependency list for a given component.
+        
+        For example, the 'projection' block depends on all attention heads,
+        and the 'ffn' block depends on the 'projection' block.
+        
+        Args:
+            comp_id: The component ID.
+        
+        Returns:
+            A list of component IDs on which comp_id depends.
         """
         deps = []
         if comp_id == "projection":
@@ -641,7 +851,18 @@ class ResourceAwareDistributor:
 
     def __estimate_transfer_size(self, source_id: str, target_id: str) -> float:
         """
-        Same logic: head->projection or projection->ffn
+        Estimate the data transfer size (in GB) between two components.
+        
+        The calculation is based on the transformer’s current sequence length and configuration.
+        It applies specific formulas for transferring data from attention heads to projection,
+        or from projection to the feed-forward network.
+        
+        Args:
+            source_id: ID of the source component.
+            target_id: ID of the target component.
+        
+        Returns:
+            Estimated data transfer size in GB.
         """
         if source_id.startswith("head_") and target_id == "projection":
             return (
