@@ -207,15 +207,9 @@ pip install -e .
 ### 2. Usage
 
 #### Running Experiments
-##### Baseline Comparison:
+##### Example: Baseline Comparison:
 ```bash
 python run_experiments.py --config experiments/configs/baseline_comparison.yaml --output-dir results/baseline
-```
-##### Edge Cluster, Distributed Edge, Hybrid Cloud-Edge:
-```bash
-python run_experiments.py --config experiments/configs/edge_cluster.yaml --output-dir results/edge_cluster
-python run_experiments.py --config experiments/configs/distributed_edge.yaml --output-dir results/distributed_edge
-python run_experiments.py --config experiments/configs/hybrid_cloud_edge.yaml --output-dir results/hybrid_cloud
 ```
 #### Simulation Workflow
 1. Initialization:
@@ -230,21 +224,6 @@ The scheduler builds an execution plan for each generation step, resolves compon
 4. Metrics Collection:
 Throughout the simulation, detailed performance, resource, and communication metrics are collected for post-run analysis.
 
-#### Metrics and Analysis
-- Real-Time Metrics:
-The simulation engine uses the MetricsCollector to log:
-  - Step latencies.
-  - Computation and transfer durations.
-  - Device resource utilization and network bandwidth metrics.
-- Post-Simulation Summary:
-  - Generate and view a summary of metrics:
-  ```python
-  from simulation.metrics import MetricsCollector
-  metrics = MetricsCollector()
-  summary = metrics.get_summary()
-  print(summary)
-  ```
-
 ### 3. Configuration
 
 Experiment parameters are defined in YAML files under experiments/configs/. Typical settings include:
@@ -252,18 +231,6 @@ Experiment parameters are defined in YAML files under experiments/configs/. Typi
 - Resource Specifications: Memory and compute capacities (with statistical parameters).
 - Workload Settings: Transformer model parameters (e.g., number of heads, embedding dimensions, sequence lengths).
 Customize these files to simulate various deployment scenarios and hardware constraints.
-
-### 4. Testing
-
-Run the full test suite to ensure proper functionality:
-```bash
-pytest tests/ --cov=src --cov-report=html
-```
-To test specific modules, use commands such as:
-```bash
-pytest tests/test_core/
-pytest tests/test_simulation/
-```
 
 ## Author & Contact
 
