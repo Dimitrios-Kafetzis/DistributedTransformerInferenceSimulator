@@ -1,6 +1,6 @@
 # Distributed Transformer Inference Simulator
 
-A Python-based simulation framework for resource-aware, distributed Transformer (https://arxiv.org/html/1706.03762v7) inference. This simulator is designed to model and optimize the inference of Transformer models across heterogeneous environments such as edge clusters, distributed edge networks, and hybrid cloud-edge deployments.
+A Python-based simulation framework for resource-aware, distributed Transformer model (Decoder-only) inference. This simulator is designed to model and optimize the inference of Transformer models across heterogeneous environments such as edge clusters, distributed edge networks, and hybrid cloud-edge deployments.
 
 ---
 
